@@ -35,7 +35,7 @@ func explainMissingPowerConfig(deviceName, location string) string {
 	fmt.Fprintf(&b, "    location: %q\n", loc)
 	fmt.Fprintf(&b, "    power:\n")
 	fmt.Fprintf(&b, "      type: meross\n")
-	fmt.Fprintf(&b, "      ip: 192.168.1.112\n")
+	fmt.Fprintf(&b, "      ip: 192.0.2.10\n")
 	fmt.Fprintf(&b, "      key: \"<meross account key>\"\n")
 	fmt.Fprintf(&b, "      # channel: 0\n\n")
 	fmt.Fprintf(&b, "Registered power plugin types: %s\n", strings.Join(registeredPowerTypes(), ", "))

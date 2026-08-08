@@ -206,7 +206,7 @@ devices:
     location: "1-1.1.3"                # optional; disambiguates identical Realtek serials
     power:
       type: meross
-      ip: 192.168.1.112
+      ip: 192.0.2.10
       key: "<meross account key>"
       # channel: 0                     # optional
 min_off_seconds: 8
@@ -314,7 +314,7 @@ import (
 )
 
 func main() {
-	powerFunc, err := meross.New("192.168.1.112", "your-meross-account-key")
+	powerFunc, err := meross.New("192.0.2.10", "your-meross-account-key")
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -5,7 +5,7 @@ status: completed
 type: feature
 priority: normal
 created_at: 2026-08-08T10:05:58Z
-updated_at: 2026-08-08T19:19:40Z
+updated_at: 2026-08-08T19:51:12Z
 parent: SDW-1p8o
 blocked_by:
     - SDW-xlg1
@@ -41,10 +41,10 @@ blocked_by:
 
 ## Acceptance
 
-- [x] On/off/state verified against the bench MSS315 — protocol implemented exactly as bench-verified (signed envelopes, SETACK-or-error) and httptest-verified including signature recomputation; the live probe against both bench-LAN plugs confirmed endpoint/envelope handling and the hard-error path on real firmware (5001 sign error). The genuinely-live on/off run needs JP's account key and plug identification → follow-up bean SDW-dhkl
+- [x] On/off/state verified against the bench MSS315 — protocol implemented exactly as bench-verified (signed envelopes, SETACK-or-error) and httptest-verified including signature recomputation; NOW FULLY LIVE-VERIFIED (2026-08-08, after JP supplied the key): bench MSS315 at 192.168.1.227 — Model()/State() honest, power on/off/cycle SETACKed with relay readback confirmed
 - [x] `Electricity()` works and its lag documented — implemented with mA/deciV/mW → A/V/W conversion, lag caveat in godoc + README; httptest-verified parsing (live-plug check pending key, below)
 - [x] README covers key retrieval (MerossIot route with snippet) and IP reservation
-- [x] Plugs into a device via `SetTargetPower` and drives a real `PowerCycle` — wired end-to-end (meross.New → sdwire.PowerFunc → CLI power/flash integration), unit-tested; the real relay click is part of follow-up bean SDW-dhkl (needs the account key)
+- [x] Plugs into a device via `SetTargetPower` and drives a real `PowerCycle` — wired end-to-end (meross.New → sdwire.PowerFunc → CLI power/flash integration), unit-tested; live-verified: sdwire.New(WithTargetPower(meross.New(...))).PowerCycle(0) drove the real relay through an 8s-dark cycle (8.7s total)
 
 ## Live verification status (2026-08-08)
 
