@@ -1,8 +1,10 @@
 package hubpower
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -58,6 +60,52 @@ func TestCacheDeleteRemovesEntryAcrossSave(t *testing.T) {
 	}
 	if got := loaded.Get("stale"); got != nil {
 		t.Errorf("Get(stale) after delete = %+v, want nil", got)
+	}
+}
+
+func TestCacheSaveLeavesFileOtherReadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hubports.json")
+
+	c, err := LoadCache(path)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	c.Put("device-key", &PortRef{Bus: 1, Port: 1})
+	if err := c.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode().Perm()&0o004 == 0 {
+		t.Errorf("Save left mode %o, want other-read bit set so unprivileged runs after a sudo run can read it", info.Mode().Perm())
+	}
+}
+
+func TestLoadCachePermissionDeniedIsActionable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file mode bits don't restrict access on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a 0000 file, so this can't be exercised as root")
+	}
+
+	path := filepath.Join(t.TempDir(), "hubports.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o000); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadCache(path)
+	if err == nil {
+		t.Fatal("LoadCache on a 0000 file: got nil error, want permission error")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not mention path %q", err.Error(), path)
+	}
+	if !strings.Contains(err.Error(), "privileged") {
+		t.Errorf("error %q does not give the actionable sudo hint", err.Error())
 	}
 }
 
