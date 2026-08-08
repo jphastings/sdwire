@@ -1,0 +1,7 @@
+# Go tooling (gofmt in particular) requires LF line endings; without this,
+# Windows checkouts with core.autocrlf convert every file to CRLF and the
+# CI gofmt check reports the whole tree as unformatted.
+* text=auto
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

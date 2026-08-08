@@ -81,7 +81,11 @@ jobs:
         if: runner.os == 'Windows'
         run: go test ./internal/...
 
+      # Formatting is OS-independent, so one job checking it is enough.
+      # (It also avoids ever re-tripping over CRLF working trees on Windows —
+      # belt to .gitattributes' braces.)
       - name: gofmt check
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           fmt_out="$(gofmt -l .)"
