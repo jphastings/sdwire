@@ -1,11 +1,11 @@
 ---
 # SDW-xlg1
 title: Reorganise package; per-device PowerFunc hooks and PowerCycle
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-08-08T10:05:23Z
-updated_at: 2026-08-08T10:05:58Z
+updated_at: 2026-08-08T15:20:24Z
 parent: SDW-1p8o
 ---
 
@@ -34,7 +34,16 @@ Reorganise the (currently single-file) package for clarity and extend it so each
 
 ## Acceptance
 
-- [ ] `PowerFunc` settable per device; helpers call it automatically; nil is a clean no-op
-- [ ] `PowerCycle` enforces minimum dark time (default ≥8 s)
-- [ ] Package split lands with godoc-clean public API; existing behaviour (SDWireC switching, listing) unchanged
-- [ ] Both latent bugs fixed with tests where feasible
+- [x] `PowerFunc` settable per device; helpers call it automatically; nil is a clean no-op
+- [x] `PowerCycle` enforces minimum dark time (default ≥8 s)
+- [x] Package split lands with godoc-clean public API; existing behaviour (SDWireC switching, listing) unchanged
+- [x] Both latent bugs fixed with tests where feasible (context ownership + identity; hjkk's remaining consumer checkbox tracked in its own bean)
+
+## Summary of Changes
+
+- Module renamed to github.com/jphastings/sdwire; README updated with fork note.
+- sdwire.go split into sdwire.go (types, discovery, options), identity.go (pure identity/location parse+match), power.go (PowerFunc, TargetPower, PowerCycle), controller_sdwirec.go, controller_sdwire3.go, power/doc.go (plugin contract docs).
+- PowerFunc per device via WithTargetPower option or SetTargetPower; TargetPower/PowerCycle are clean no-ops when nil; PowerCycle enforces min dark time (DefaultMinDarkTime = 8s when minOff <= 0) via stubbable sleep.
+- Context-ownership bug fixed (SDWire owns gousb.Context, closed in Close(); all error paths close devices+context; ListDevices closes devices even when OpenDevices errors).
+- Identity bug fixed at SDK level: DeviceInfo gains Bus/PortPath, Identity() (Python-compatible serial.p1.p2...), Location() (1-1.1.3 sysfs style); NewWithSerial accepts suffixed form and errors listing candidates on ambiguous plain serial; NewWithIdentity accepts identity or location form.
+- Unit tests for identity formatting/selection and PowerCycle behaviour (stubbed sleep).

@@ -1,4 +1,4 @@
-module github.com/fcjr/sdwire
+module github.com/jphastings/sdwire
 
 go 1.23
 

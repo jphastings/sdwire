@@ -1,10 +1,11 @@
 ---
 # SDW-1p8o
 title: 'Cross-platform Go sdwire: real SDWire3 switching, flash helper, power plugins, CLI'
-status: todo
+status: in-progress
 type: epic
+priority: normal
 created_at: 2026-08-08T10:05:23Z
-updated_at: 2026-08-08T10:05:23Z
+updated_at: 2026-08-08T15:02:52Z
 ---
 
 Make this Go port (forked/renamed to `github.com/jphastings/sdwire`) a complete, cross-platform replacement for the Python `sdwire` CLI, plus the pieces the bench actually needs: working SDWire3 target switching, a flash-cycle helper, per-device DUT power hooks, a Meross plug plugin, and a cobra/viper CLI.

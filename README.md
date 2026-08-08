@@ -1,7 +1,9 @@
 # SDWire Go Library
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/fcjr/sdwire.svg)](https://pkg.go.dev/github.com/fcjr/sdwire)
-[![Go Report Card](https://goreportcard.com/badge/github.com/fcjr/sdwire)](https://goreportcard.com/report/github.com/fcjr/sdwire)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jphastings/sdwire.svg)](https://pkg.go.dev/github.com/jphastings/sdwire)
+[![Go Report Card](https://goreportcard.com/badge/github.com/jphastings/sdwire)](https://goreportcard.com/report/github.com/jphastings/sdwire)
+
+This is a fork of [github.com/fcjr/sdwire](https://github.com/fcjr/sdwire) with SDWire3 improvements.
 
 Go library for controlling SDWireC & SDWire3 devices - USB-controlled SD card multiplexers for automated testing and development.
 
@@ -14,7 +16,7 @@ Go library for controlling SDWireC & SDWire3 devices - USB-controlled SD card mu
 ## Installation
 
 ```bash
-go get github.com/fcjr/sdwire
+go get github.com/jphastings/sdwire
 ```
 
 ## Quick Start
@@ -24,7 +26,7 @@ package main
 
 import (
     "log"
-    "github.com/fcjr/sdwire"
+    "github.com/jphastings/sdwire"
 )
 
 func main() {
@@ -75,7 +77,7 @@ if err != nil {
 import (
     "fmt"
     "log"
-    "github.com/fcjr/sdwire"
+    "github.com/jphastings/sdwire"
 )
 
 device, err := sdwire.New()
@@ -97,7 +99,7 @@ fmt.Printf("Device: %s [%s::%s]\n",
 import (
     "fmt"
     "log"
-    "github.com/fcjr/sdwire"
+    "github.com/jphastings/sdwire"
 )
 
 // List all connected SDWireC devices
