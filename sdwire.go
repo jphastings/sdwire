@@ -236,11 +236,15 @@ func connect(sel selection, opts []Option) (*SDWire, error) {
 		// Only an outright "nothing matched" is worth trying the cache
 		// fallback for; an ambiguous-match error means real candidates
 		// exist and should be reported, not silently resolved by picking
-		// whatever the cache happens to revive.
-		if errors.Is(pickErr, errNoDeviceFound) {
-			if dev, info, fbErr := tryCacheFallback(ctx, o, sel.matchesCacheEntry); fbErr == nil {
+		// whatever the cache happens to revive. WithoutRevive skips the
+		// fallback entirely, for callers that must not have the side
+		// effect of powering a device on (e.g. a read-only state check).
+		if errors.Is(pickErr, ErrNoDeviceFound) && !o.withoutRevive {
+			dev, info, fbErr := tryCacheFallback(ctx, o, sel.matchesCacheEntry)
+			if fbErr == nil {
 				return finishConnect(ctx, dev, info, o)
 			}
+			o.warnFunc(fmt.Sprintf("hub-cache revive failed: %v", fbErr))
 		}
 		ctx.Close()
 		return nil, pickErr
@@ -279,7 +283,7 @@ func New(opts ...Option) (*SDWire, error) {
 	return connect(selection{
 		pick: func(candidates []deviceMatch) (int, error) {
 			if len(candidates) == 0 {
-				return 0, fmt.Errorf("no SDWire devices found: %w", errNoDeviceFound)
+				return 0, fmt.Errorf("no SDWire devices found: %w", ErrNoDeviceFound)
 			}
 			return 0, nil
 		},
@@ -353,6 +357,15 @@ func (s *SDWire) GetProduct() string {
 // GetManufacturer returns the device's USB manufacturer name.
 func (s *SDWire) GetManufacturer() string {
 	return s.info.Manufacturer
+}
+
+// Info returns the DeviceInfo this SDWire was connected with, including its
+// USB topology (Bus, PortPath) and the Identity()/Location() helpers derived
+// from them. Useful for callers (e.g. the sdwire CLI) that connected via a
+// partial selector — a bare serial, or a configured device name — and need
+// the fully-resolved identity of the device they ended up with.
+func (s *SDWire) Info() DeviceInfo {
+	return s.info
 }
 
 // String returns a formatted string with device information.

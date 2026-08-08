@@ -63,6 +63,17 @@ func TestWithHubCachePath(t *testing.T) {
 	}
 }
 
+func TestWithoutRevive(t *testing.T) {
+	o := defaultOptions()
+	if o.withoutRevive {
+		t.Error("expected withoutRevive to default to false")
+	}
+	WithoutRevive()(o)
+	if !o.withoutRevive {
+		t.Error("expected withoutRevive to be enabled")
+	}
+}
+
 func TestWithTargetPowerSetsPowerFunc(t *testing.T) {
 	o := defaultOptions()
 	called := false

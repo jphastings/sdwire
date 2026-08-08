@@ -86,7 +86,7 @@ func TestSelectBySerial(t *testing.T) {
 }
 
 // TestNoMatchVsAmbiguousErrorDistinction locks in that only a genuine "no
-// match" error wraps errNoDeviceFound. connect() relies on this to decide
+// match" error wraps ErrNoDeviceFound. connect() relies on this to decide
 // whether the hubpower cache fallback is worth trying: an ambiguous match
 // means real candidates already exist and should be reported as-is, not
 // silently resolved by reviving whatever the cache happens to find.
@@ -97,13 +97,13 @@ func TestNoMatchVsAmbiguousErrorDistinction(t *testing.T) {
 	}
 
 	_, noMatchErr := selectBySerial(candidates, "nope")
-	if !errors.Is(noMatchErr, errNoDeviceFound) {
-		t.Errorf("no-match error = %v, want it to wrap errNoDeviceFound", noMatchErr)
+	if !errors.Is(noMatchErr, ErrNoDeviceFound) {
+		t.Errorf("no-match error = %v, want it to wrap ErrNoDeviceFound", noMatchErr)
 	}
 
 	_, ambiguousErr := selectBySerial(candidates, "DUP")
-	if errors.Is(ambiguousErr, errNoDeviceFound) {
-		t.Errorf("ambiguous-match error = %v, should not wrap errNoDeviceFound", ambiguousErr)
+	if errors.Is(ambiguousErr, ErrNoDeviceFound) {
+		t.Errorf("ambiguous-match error = %v, should not wrap ErrNoDeviceFound", ambiguousErr)
 	}
 }
 

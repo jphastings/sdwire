@@ -18,6 +18,7 @@ type options struct {
 	hostWaitTimeout time.Duration
 	hubCachePath    string
 	powerFunc       PowerFunc
+	withoutRevive   bool
 }
 
 func defaultOptions() *options {
@@ -74,5 +75,17 @@ func WithHostWaitTimeout(d time.Duration) Option {
 func WithHubCachePath(path string) Option {
 	return func(o *options) {
 		o.hubCachePath = path
+	}
+}
+
+// WithoutRevive disables the hub-cache revive fallback: when no attached
+// device matches, connect() returns the not-found error as-is instead of
+// powering on a cached hub port and waiting for the device to reappear.
+// Read-only callers (e.g. the sdwire CLI's `state` command) use this so
+// they never have the side effect of switching an SDWire3 that is
+// intentionally powered off in target mode back to host mode.
+func WithoutRevive() Option {
+	return func(o *options) {
+		o.withoutRevive = true
 	}
 }

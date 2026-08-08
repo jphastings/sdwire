@@ -7,12 +7,14 @@ import (
 	"strings"
 )
 
-// errNoDeviceFound is wrapped into every "not found" error returned by the
+// ErrNoDeviceFound is wrapped into every "not found" error returned by the
 // selectBy* functions (and used directly by New()). It lets connect()
 // distinguish "nothing matched" — worth trying the hubpower cache fallback
 // for — from an ambiguous-match error, which should be returned as-is
-// rather than silently resolved by a cache lookup.
-var errNoDeviceFound = errors.New("no matching SDWire device found")
+// rather than silently resolved by a cache lookup. It is exported so
+// callers (e.g. the sdwire CLI) can tell "device isn't there right now"
+// apart from other connection failures.
+var ErrNoDeviceFound = errors.New("no matching SDWire device found")
 
 // Location returns the device's USB topology location in Linux sysfs style,
 // e.g. "1-1.1.3". Devices with no parent hub ports in their path (an empty
@@ -167,7 +169,7 @@ func selectByLocation(candidates []DeviceInfo, bus int, path []int) (int, error)
 func resolveMatch(candidates []DeviceInfo, matches []int, what string) (int, error) {
 	switch len(matches) {
 	case 0:
-		return 0, fmt.Errorf("no SDWire device matching %s found: %w", what, errNoDeviceFound)
+		return 0, fmt.Errorf("no SDWire device matching %s found: %w", what, ErrNoDeviceFound)
 	case 1:
 		return matches[0], nil
 	default:

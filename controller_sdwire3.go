@@ -126,7 +126,15 @@ func (c *sdwire3Controller) SetMode(mode SwitchMode) error {
 		}
 		ref := c.port.Ref()
 		devPath := append(append([]int(nil), ref.HubPath...), ref.Port)
-		dev, err := waitForSDWireAt(c.ctx, ref.Bus, devPath, c.hostWaitTimeout)
+		dev, err := waitForSDWireViaPort(c.ctx, c.port, ref.Bus, devPath, c.hostWaitTimeout)
+		if err != nil {
+			// A reader that fails to re-enumerate may be latched up from a
+			// too-brief power interruption: give it one full power-cycle
+			// with real dark time before giving up.
+			if rerr := revivePortPower(c.port); rerr == nil {
+				dev, err = waitForSDWireViaPort(c.ctx, c.port, ref.Bus, devPath, c.hostWaitTimeout)
+			}
+		}
 		if err != nil {
 			return fmt.Errorf("switching to host mode: %w", err)
 		}
@@ -151,14 +159,7 @@ func (c *sdwire3Controller) Mode() (SwitchMode, error) {
 	if err != nil {
 		return ModeUnknown, err
 	}
-	switch {
-	case !status.Powered:
-		return ModeTarget, nil
-	case status.Connected:
-		return ModeHost, nil
-	default:
-		return ModeUnknown, nil
-	}
+	return statusToMode(status), nil
 }
 
 // Close closes the SDWire3 device handle, if currently open, and the hub
