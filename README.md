@@ -1,35 +1,23 @@
 # sdwire
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/jphastings/sdwire.svg)](https://pkg.go.dev/github.com/jphastings/sdwire)
-[![Go Report Card](https://goreportcard.com/badge/github.com/jphastings/sdwire)](https://goreportcard.com/report/github.com/jphastings/sdwire)
 
 A Go SDK, and a CLI built on it, for controlling **SDWireC** and **SDWire3**
 devices — USB-controlled SD card multiplexers that switch a single SD card
 between a host computer (for flashing images) and a target device under test
 (for booting them), without physically re-seating the card.
 
-This is a fork of [github.com/fcjr/sdwire](https://github.com/fcjr/sdwire),
-rewritten with SDWire3 support, an honest `Mode()` readback, a hub-power
-fallback for SDWire3s that are switched off, and this CLI.
+The CLI is a drop-in replacement for the [official python package](https://badgerd.nl/sdwirec/#quick-start), but includes:
+- hub-power fallback for SDWire3 (which otherwise can [cause failures](https://github.com/Badger-Embedded/sdwire-cli/issues/27))
+- disk unmounting from the host before switching to target mode
+- support for power managing the target (currently using Meross WiFi power plugs)
+- one-shot command for updaing the target SD card image; the flow:
+  1. switch off target
+  2. flash SD image
+  3. re-mount to target
+  4. power on target
 
-## The SDWire3 VBUS story
-
-Unlike SDWireC (which switches instantly via FTDI CBUS bits), an SDWire3
-never hands the SD card to the target while its own USB link stays up — the
-kernel-driver detach/reset trick that older tooling uses for it does not
-actually move the mux. What *does* work is depriving the SDWire3 of power
-altogether: cutting `PORT_POWER` on its **upstream USB hub port** drops it
-off the bus entirely, and the now-unpowered mux passes the card straight
-through to the target (observed in about a second); restoring port power
-re-enumerates the reader at its power-on default — card connected to the
-host — with the resulting block device typically appearing some 6 seconds
-later. That means two things in practice: an SDWire3 **must sit behind an
-external USB hub that supports independent per-port power switching** (a
-device plugged into a root port, or behind a ganged-power hub, can't be
-fully switched), and because a target board normally only probes its SD
-slot at boot or on a card-detect edge, **the target must be rebooted or
-power-cycled after switching to target mode** before it will notice the
-card arrived.
+This was originally a fork of [github.com/fcjr/sdwire](https://github.com/fcjr/sdwire).
 
 ## Install
 
