@@ -1,11 +1,11 @@
 ---
 # SDW-v0mc
 title: SDWire3 target mode via VBUS port power (macOS/Linux/Windows best-effort)
-status: todo
+status: completed
 type: feature
 priority: high
 created_at: 2026-08-08T10:05:23Z
-updated_at: 2026-08-08T10:05:58Z
+updated_at: 2026-08-08T17:35:33Z
 parent: SDW-1p8o
 ---
 
@@ -35,7 +35,17 @@ Replace `sdwire3Controller.SetMode` with VBUS port-power control — the only me
 
 ## Acceptance
 
-- [ ] macOS: `SetMode(Target)` → card readable on the target side; `SetMode(Host)` → block device returns; state readback truthful
-- [ ] Linux: same, with udev rule documented
-- [ ] Windows: works on a UsbDk-accessible hub, or fails with the documented actionable error
-- [ ] Root-port and ganged-hub cases produce the designed errors/warnings
+- [x] macOS: `SetMode(Target)` → card readable on the target side; `SetMode(Host)` → block device returns; state readback truthful — verified on the bench 2026-08-08 (TS4 hub port 3; device drops off bus ~1s, honest Target readback; fresh-process cache fallback re-powered the port, GOSD volumes remounted, honest Host readback)
+- [x] Linux: same, with udev rule documented — udev rules (device + hub-class access) added to README; hardware path shares the verified libusb implementation but no Linux bench was available this session
+- [x] Windows: works on a UsbDk-accessible hub, or fails with the documented actionable error — control-transfer failures wrap a per-OS hint (UsbDk/WinUSB on Windows); no Windows hardware this session, best-effort per epic
+- [x] Root-port and ganged-hub cases produce the designed errors/warnings — ErrRootPort sentinel with attach-behind-a-hub guidance; ganged/none power switching parsed from wHubCharacteristics and surfaced once via WithWarningHandler; both unit-tested (bench TS4 is per-port so not physically reproducible here)
+
+## Summary of Changes
+
+- New hubpower/ package: ResolveParent (parent hub + port from bus/path, ErrRootPort for root-attached devices), Open/Port with SetPower (SET/CLEAR_FEATURE PORT_POWER), Status (GET_STATUS with USB2 bit-8 / USB3 bit-9 power decoding), PerPortPower (wHubCharacteristics), platform-specific access hints in errors, and a JSON on-disk cache (default ~/Library/Caches/sdwire/hubports.json, key = DeviceInfo.Identity()).
+- sdwire3Controller rewritten to VBUS switching: eager hub resolution + cache write at construction; ModeTarget closes the reader handle then cuts port power; ModeHost restores power and re-opens after re-enumeration; Mode() is an honest hub-port readback (unpowered=Target, powered+connected=Host, else Unknown). Old detach+reset kept as sdwire3LegacyController behind WithLegacySDWire3Switching.
+- DeviceController grew Mode()/Close(); controllers own device handles; SDWireC gained honest Mode() via FTDI SIO_READ_PINS.
+- Constructors fall back to the on-disk cache when the device is off-bus (powered off): re-power the cached hub port and wait for re-enumeration — verified working in a fresh process on the bench. Stale cache entries (hub VID/PID mismatch) are pruned.
+- Options: WithWarningHandler, WithHostWaitTimeout (default 20s — re-enumeration observed at ~11s on the bench), WithHubCachePath, WithLegacySDWire3Switching.
+
+Bench note: the rig's sdwire-reboot currently refuses with "multiple USB3.0-CRW readers" because a stale IOKit registry entry (!registered/inactive, id 0x1000597a1) shadows the live reader at locationID 0x01113000 — pre-existing, unaffected by these cycles; a Mac reboot should clear it.

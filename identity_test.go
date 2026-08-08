@@ -1,6 +1,7 @@
 package sdwire
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,28 @@ func TestSelectBySerial(t *testing.T) {
 			t.Fatal("expected an error for an unknown serial")
 		}
 	})
+}
+
+// TestNoMatchVsAmbiguousErrorDistinction locks in that only a genuine "no
+// match" error wraps errNoDeviceFound. connect() relies on this to decide
+// whether the hubpower cache fallback is worth trying: an ambiguous match
+// means real candidates already exist and should be reported as-is, not
+// silently resolved by reviving whatever the cache happens to find.
+func TestNoMatchVsAmbiguousErrorDistinction(t *testing.T) {
+	candidates := []DeviceInfo{
+		{Serial: "DUP", Bus: 1, PortPath: []int{1}},
+		{Serial: "DUP", Bus: 1, PortPath: []int{2}},
+	}
+
+	_, noMatchErr := selectBySerial(candidates, "nope")
+	if !errors.Is(noMatchErr, errNoDeviceFound) {
+		t.Errorf("no-match error = %v, want it to wrap errNoDeviceFound", noMatchErr)
+	}
+
+	_, ambiguousErr := selectBySerial(candidates, "DUP")
+	if errors.Is(ambiguousErr, errNoDeviceFound) {
+		t.Errorf("ambiguous-match error = %v, should not wrap errNoDeviceFound", ambiguousErr)
+	}
 }
 
 func TestSelectByIdentity(t *testing.T) {

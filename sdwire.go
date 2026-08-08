@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/google/gousb"
+	"github.com/jphastings/sdwire/hubpower"
 )
 
 const (
@@ -53,6 +54,11 @@ const (
 	ModeHost
 )
 
+// ModeUnknown indicates a DeviceController could not determine which side
+// the SD card is currently connected to (for example, a hub port that is
+// powered but whose device has not finished re-enumerating yet).
+const ModeUnknown SwitchMode = -1
+
 // String returns a human-readable description of the switch mode.
 func (m SwitchMode) String() string {
 	switch m {
@@ -60,6 +66,8 @@ func (m SwitchMode) String() string {
 		return "Target"
 	case ModeHost:
 		return "Host"
+	case ModeUnknown:
+		return "Unknown"
 	default:
 		return "Unknown"
 	}
@@ -67,14 +75,19 @@ func (m SwitchMode) String() string {
 
 // DeviceController defines the interface for controlling different SDWire device generations.
 type DeviceController interface {
+	// SetMode switches the SD card between the target device and the host computer.
 	SetMode(mode SwitchMode) error
+	// Mode reads back which side the SD card is currently connected to, where the
+	// underlying mechanism allows an honest readback.
+	Mode() (SwitchMode, error)
+	// Close releases any USB device handles the controller owns.
+	Close() error
 }
 
 // SDWire represents a connected SDWire device that can switch an SD card
 // between a target device and host computer.
 type SDWire struct {
 	ctx        *gousb.Context
-	device     *gousb.Device
 	info       DeviceInfo
 	controller DeviceController
 	powerFunc  PowerFunc
@@ -91,17 +104,6 @@ type DeviceInfo struct {
 	// PortPath is the physical path of parent hub ports leading to the
 	// device, as reported by gousb's DeviceDesc.Path.
 	PortPath []int
-}
-
-// Option customizes a newly constructed SDWire.
-type Option func(*SDWire)
-
-// WithTargetPower configures the PowerFunc used to control power to the
-// target board (the Device Under Test) attached via this SDWire.
-func WithTargetPower(fn PowerFunc) Option {
-	return func(s *SDWire) {
-		s.powerFunc = fn
-	}
 }
 
 func matchesSDWire(desc *gousb.DeviceDesc) bool {
@@ -147,14 +149,17 @@ func closeDevices(devs []*gousb.Device) {
 	}
 }
 
-func newController(dev *gousb.Device, gen DeviceGeneration) (DeviceController, error) {
-	switch gen {
+func newController(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo, o *options) (DeviceController, error) {
+	switch info.Generation {
 	case GenerationSDWireC:
 		return &sdwireCController{device: dev}, nil
 	case GenerationSDWire3:
-		return &sdwire3Controller{device: dev}, nil
+		if o.legacySDWire3 {
+			return &sdwire3LegacyController{device: dev}, nil
+		}
+		return newSDWire3Controller(ctx, dev, info, o), nil
 	default:
-		return nil, fmt.Errorf("unsupported device generation: %v", gen)
+		return nil, fmt.Errorf("unsupported device generation: %v", info.Generation)
 	}
 }
 
@@ -190,11 +195,27 @@ func infosOf(candidates []deviceMatch) []DeviceInfo {
 	return infos
 }
 
-// connect enumerates attached SDWire devices, hands them to selectDevice to
-// pick one, and closes every device (and the gousb.Context) that isn't the
-// chosen one. The returned SDWire owns the context for the rest of its
-// lifetime and closes it in Close().
-func connect(selectDevice func(candidates []deviceMatch) (int, error), opts []Option) (*SDWire, error) {
+// selection describes how a New-family constructor picks a device: pick
+// chooses among currently attached, enumerated devices; matchesCacheEntry
+// decides whether a hubpower cache entry (for a device that may currently
+// be powered off) is worth trying as a fallback.
+type selection struct {
+	pick              func(candidates []deviceMatch) (int, error)
+	matchesCacheEntry func(key string, ref *hubpower.PortRef) bool
+}
+
+// connect enumerates attached SDWire devices, hands them to sel.pick to
+// choose one, and closes every device (and the gousb.Context) that isn't
+// the chosen one. If no attached device matches, it falls back to
+// powering on any hubpower-cached hub port matching sel.matchesCacheEntry
+// and waiting for a device to reappear there. The returned SDWire owns the
+// context for the rest of its lifetime and closes it in Close().
+func connect(sel selection, opts []Option) (*SDWire, error) {
+	o := defaultOptions()
+	for _, opt := range opts {
+		opt(o)
+	}
+
 	ctx := gousb.NewContext()
 
 	devs, err := ctx.OpenDevices(matchesSDWire)
@@ -209,11 +230,20 @@ func connect(selectDevice func(candidates []deviceMatch) (int, error), opts []Op
 		candidates[i] = deviceMatch{dev: dev, info: *describeDevice(dev)}
 	}
 
-	idx, err := selectDevice(candidates)
-	if err != nil {
+	idx, pickErr := sel.pick(candidates)
+	if pickErr != nil {
 		closeDevices(devs)
+		// Only an outright "nothing matched" is worth trying the cache
+		// fallback for; an ambiguous-match error means real candidates
+		// exist and should be reported, not silently resolved by picking
+		// whatever the cache happens to revive.
+		if errors.Is(pickErr, errNoDeviceFound) {
+			if dev, info, fbErr := tryCacheFallback(ctx, o, sel.matchesCacheEntry); fbErr == nil {
+				return finishConnect(ctx, dev, info, o)
+			}
+		}
 		ctx.Close()
-		return nil, err
+		return nil, pickErr
 	}
 
 	chosen := candidates[idx]
@@ -223,34 +253,37 @@ func connect(selectDevice func(candidates []deviceMatch) (int, error), opts []Op
 		}
 	}
 
-	controller, err := newController(chosen.dev, chosen.info.Generation)
+	return finishConnect(ctx, chosen.dev, chosen.info, o)
+}
+
+func finishConnect(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo, o *options) (*SDWire, error) {
+	controller, err := newController(ctx, dev, info, o)
 	if err != nil {
-		chosen.dev.Close()
+		dev.Close()
 		ctx.Close()
 		return nil, err
 	}
 
-	sd := &SDWire{
+	return &SDWire{
 		ctx:        ctx,
-		device:     chosen.dev,
-		info:       chosen.info,
+		info:       info,
 		controller: controller,
-	}
-	for _, opt := range opts {
-		opt(sd)
-	}
-	return sd, nil
+		powerFunc:  o.powerFunc,
+	}, nil
 }
 
 // New connects to the first available SDWire device.
 // This is a convenience function for single-device setups.
 // The returned SDWire must be closed with Close() when done.
 func New(opts ...Option) (*SDWire, error) {
-	return connect(func(candidates []deviceMatch) (int, error) {
-		if len(candidates) == 0 {
-			return 0, fmt.Errorf("no SDWire devices found")
-		}
-		return 0, nil
+	return connect(selection{
+		pick: func(candidates []deviceMatch) (int, error) {
+			if len(candidates) == 0 {
+				return 0, fmt.Errorf("no SDWire devices found: %w", errNoDeviceFound)
+			}
+			return 0, nil
+		},
+		matchesCacheEntry: func(string, *hubpower.PortRef) bool { return true },
 	}, opts)
 }
 
@@ -262,8 +295,14 @@ func New(opts ...Option) (*SDWire, error) {
 // returned listing the Identity() of each candidate.
 // The returned SDWire must be closed with Close() when done.
 func NewWithSerial(serial string, opts ...Option) (*SDWire, error) {
-	return connect(func(candidates []deviceMatch) (int, error) {
-		return selectBySerial(infosOf(candidates), serial)
+	return connect(selection{
+		pick: func(candidates []deviceMatch) (int, error) {
+			return selectBySerial(infosOf(candidates), serial)
+		},
+		matchesCacheEntry: func(key string, ref *hubpower.PortRef) bool {
+			_, err := selectBySerial([]DeviceInfo{cacheEntryDeviceInfo(key, ref)}, serial)
+			return err == nil
+		},
 	}, opts)
 }
 
@@ -273,17 +312,23 @@ func NewWithSerial(serial string, opts ...Option) (*SDWire, error) {
 // (e.g. "1-1.1.3"). Use NewWithSerial instead to match on a bare serial
 // number. The returned SDWire must be closed with Close() when done.
 func NewWithIdentity(id string, opts ...Option) (*SDWire, error) {
-	return connect(func(candidates []deviceMatch) (int, error) {
-		return selectByIdentity(infosOf(candidates), id)
+	return connect(selection{
+		pick: func(candidates []deviceMatch) (int, error) {
+			return selectByIdentity(infosOf(candidates), id)
+		},
+		matchesCacheEntry: func(key string, ref *hubpower.PortRef) bool {
+			_, err := selectByIdentity([]DeviceInfo{cacheEntryDeviceInfo(key, ref)}, id)
+			return err == nil
+		},
 	}, opts)
 }
 
-// Close releases the USB device and its gousb.Context. Always call this
-// when done with the device.
+// Close releases the SDWire's controller (and any USB device handle(s) it
+// holds) and its gousb.Context. Always call this when done with the device.
 func (s *SDWire) Close() error {
 	var errs []error
-	if s.device != nil {
-		if err := s.device.Close(); err != nil {
+	if s.controller != nil {
+		if err := s.controller.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -315,7 +360,34 @@ func (s *SDWire) String() string {
 	return fmt.Sprintf("%s\t[%s::%s]", s.info.Serial, s.info.Product, s.info.Manufacturer)
 }
 
-// SetMode switches the SD card to the specified mode.
+// SetMode switches the SD card between the target device and the host
+// computer.
+//
+// For SDWire3 devices (the default; see WithLegacySDWire3Switching for the
+// legacy kernel-driver-based mechanism), this works by cutting or restoring
+// VBUS on the SDWire3's upstream USB hub port, rather than by any command
+// understood by the SDWire3 itself:
+//   - ModeTarget cuts power to the SDWire3 reader. Losing power drops it
+//     off the bus entirely, and the now-unpowered mux passes the SD card
+//     through to the target — typically within about a second.
+//   - ModeHost restores power. The reader re-enumerates at its USB
+//     power-on default (card connected to the host); the resulting block
+//     device typically appears roughly 6 seconds later.
+//
+// Because a target board normally only probes its SD slot at boot or on a
+// card-detect edge, it will not notice a card that arrived via ModeTarget
+// until it is rebooted or power-cycled — see (*SDWire).PowerCycle.
+//
+// SDWireC devices switch instantly via FTDI CBUS bits and have no such
+// caveat.
 func (s *SDWire) SetMode(mode SwitchMode) error {
 	return s.controller.SetMode(mode)
+}
+
+// Mode reads back which side the SD card is currently connected to. Not
+// all controllers can answer honestly — see the relevant
+// DeviceController's Mode doc comment (in particular,
+// WithLegacySDWire3Switching's controller cannot).
+func (s *SDWire) Mode() (SwitchMode, error) {
+	return s.controller.Mode()
 }

@@ -177,9 +177,17 @@ const (
 
 ## Hardware Requirements
 
-- SDWireC device (USB-controlled SD card multiplexer)
+- SDWireC or SDWire3 device (USB-controlled SD card multiplexer)
 - USB connection to host computer
 - Proper USB permissions (see Troubleshooting)
+- **SDWire3 only**: the device must be attached behind an external USB hub
+  that supports per-port power switching. Switching to target mode works by
+  cutting the hub port's power (VBUS) — the only mechanism that actually
+  moves the SDWire3's mux — so a device plugged directly into a root port
+  cannot be switched. After switching to target mode, the target board must
+  be (re)booted to notice the card: SD slots are only probed at boot or on a
+  card-detect edge. On Windows this requires a hub accessible to libusb
+  (install UsbDk, or bind the hub to WinUSB).
 
 ## Supported Operating Systems
 
@@ -203,7 +211,14 @@ If you get permission errors on Linux:
 
 1. **Add udev rules** - Create `/etc/udev/rules.d/99-sdwire.rules`:
    ```
+   # SDWireC (FTDI)
    SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="6001", MODE="0666"
+   # SDWire3 (Realtek reader)
+   SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="0316", MODE="0666"
+   # SDWire3 switching also needs write access to its upstream hub, since the
+   # card is handed to the target by cutting that hub port's power (VBUS).
+   # Either run as root, or grant access to hub devices:
+   SUBSYSTEM=="usb", ATTR{bDeviceClass}=="09", MODE="0666"
    ```
 
 2. **Reload udev rules**:
