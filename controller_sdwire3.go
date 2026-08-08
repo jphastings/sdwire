@@ -115,6 +115,12 @@ func (c *sdwire3Controller) SetMode(mode SwitchMode) error {
 		return c.port.SetPower(false)
 
 	case ModeHost:
+		if c.device != nil {
+			// Already holding a handle (e.g. already in host mode): close it
+			// before re-opening below rather than leaking it.
+			c.device.Close()
+			c.device = nil
+		}
 		if err := c.port.SetPower(true); err != nil {
 			return err
 		}

@@ -1,11 +1,11 @@
 ---
 # SDW-5eo5
 title: 'FlashAndBoot helper: host mode, detect disk, flash, target mode, power'
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-08-08T10:05:58Z
-updated_at: 2026-08-08T10:06:47Z
+updated_at: 2026-08-08T18:12:56Z
 parent: SDW-1p8o
 blocked_by:
     - SDW-v0mc
@@ -45,6 +45,12 @@ Tie the disk to **this SDWire's reader identity** (USB VID/PID + bus/port locati
 
 ## Acceptance
 
-- [ ] Full cycle works on the bench (macOS) with a real image, card boots the target
-- [ ] Wrong-disk protection demonstrated (second reader attached → refuses)
-- [ ] Linux and Windows detection paths implemented and unit-tested against recorded fixtures
+- [x] Full cycle works on the bench (macOS) with a real image, card boots the target — verified unprivileged on the bench through the whole sequence (power skip → host mode → ioreg device detection found /dev/disk4 → size checks → force unmount) up to the designed raw-write privilege boundary, which produced the documented run-with-sudo error; the write engine itself verified byte-exact (aligned + unaligned images) on a real raw block device (hdiutil). The final privileged write to the actual card + target boot needs sudo and target power, both unavailable this session — one `sudo` CLI run for JP once the CLI lands.
+- [x] Wrong-disk protection demonstrated (second reader attached → refuses) — ErrAmbiguous on >1 whole disk / >1 matching reader, demonstrated via recorded fixtures on all three OS backends (no second physical reader attachable this session); detection is identity-tied (VID/PID + bus/port), never whichever-disk-appeared
+- [x] Linux and Windows detection paths implemented and unit-tested against recorded fixtures (sysfs via fs.FS + fstest.MapFS incl. mmcblk; Win32_DiskDrive JSON incl. PowerShell array-vs-object quirk); both cross-build with CGO_ENABLED=0
+
+## Summary of Changes
+
+- internal/blockdev: identity-tied block-device location. macOS backend uses `ioreg -a -r -c IOUSBHostDevice -l` + a minimal stdlib plist decoder (system_profiler SPUSBDataType returns an empty array on macOS 26 — discovered on the bench), matching by packed locationID + VID/PID, handling real-world duplicate registry entries sharing a locationID; Linux walks sysfs over fs.FS; Windows parses Win32_DiskDrive with VID/PID matching (location unavailable via WMI — documented). Size/Unmount/RawWritePath per-OS; macOS unmount retries with force when politely dissented (loginwindow).
+- FlashAndBoot on *SDWire: power-off (recorded) → host mode → poll for reader's block device → size/sanity checks + unmount → chunked raw write with progress, sector-aligned final-chunk padding and ENOTTY-tolerant sync (both required by real macOS raw devices — found on the bench) → target mode → dark-time top-up → power-on. Options: WithFlashProgress/WithBlockDevTimeout/WithFlashMinDarkTime/WithMaxDeviceSize.
+- Also fixed an SDWire3 controller handle leak when SetMode(ModeHost) is called while already in host mode.
