@@ -393,8 +393,46 @@ func (s *SDWire) String() string {
 //
 // SDWireC devices switch instantly via FTDI CBUS bits and have no such
 // caveat.
-func (s *SDWire) SetMode(mode SwitchMode) error {
+//
+// Before switching to ModeTarget, any volumes mounted from this SDWire's
+// reader are unmounted (see Unmount in internal/blockdev; on macOS a
+// politely-dissented unmount is retried with force, since the data is
+// flushed either way and the card is leaving the host regardless). Pass
+// WithoutUnmount to skip this. If the reader's block device cannot be
+// located at all, the switch proceeds — there is nothing mounted to lose —
+// but an actual failed unmount aborts the switch rather than yanking a
+// mounted filesystem away.
+func (s *SDWire) SetMode(mode SwitchMode, opts ...ModeOption) error {
+	mo := modeOptions{}
+	for _, opt := range opts {
+		opt(&mo)
+	}
+
+	if mode == ModeTarget && !mo.skipUnmount {
+		if devPath, err := blockdevFind(blockdevRef(s.info)); err == nil {
+			if uerr := blockdevUnmount(devPath); uerr != nil {
+				return fmt.Errorf("unmounting %s before switching to target: %w (pass WithoutUnmount to skip)", devPath, uerr)
+			}
+		}
+	}
+
 	return s.controller.SetMode(mode)
+}
+
+// modeOptions holds per-SetMode-call configuration.
+type modeOptions struct {
+	skipUnmount bool
+}
+
+// ModeOption customizes a single SetMode call.
+type ModeOption func(*modeOptions)
+
+// WithoutUnmount skips the automatic unmount of the reader's mounted
+// volumes that SetMode(ModeTarget) performs by default.
+func WithoutUnmount() ModeOption {
+	return func(mo *modeOptions) {
+		mo.skipUnmount = true
+	}
 }
 
 // Mode reads back which side the SD card is currently connected to. Not

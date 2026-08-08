@@ -1,10 +1,11 @@
 ---
 # SDW-or85
 title: Safe unmount before switching card from host to target
-status: todo
+status: in-progress
 type: feature
+priority: normal
 created_at: 2026-08-08T18:50:34Z
-updated_at: 2026-08-08T18:50:34Z
+updated_at: 2026-08-08T19:11:10Z
 parent: SDW-1p8o
 ---
 

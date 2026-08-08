@@ -99,7 +99,9 @@ func TestFlashAndBootSequenceAndRefDerivation(t *testing.T) {
 		t.Fatalf("FlashAndBoot: %v", err)
 	}
 
-	want := []string{"power:false", "SetMode:Host", "find", "size", "unmount", "SetMode:Target", "power:true"}
+	// The second find+unmount pair is SetMode(ModeTarget)'s own default
+	// unmount, re-checking for volumes that auto-remounted after the write.
+	want := []string{"power:false", "SetMode:Host", "find", "size", "unmount", "find", "unmount", "SetMode:Target", "power:true"}
 	if !slices.Equal(log, want) {
 		t.Errorf("operation order = %v, want %v", log, want)
 	}

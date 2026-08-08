@@ -32,6 +32,7 @@ func resolveSwitchMode(arg string) (sdwire.SwitchMode, error) {
 }
 
 func newSwitchCmd(flags *globalFlags) *cobra.Command {
+	var noUnmount bool
 	cmd := &cobra.Command{
 		Use:       "switch {dut|target|host|ts|off}",
 		Short:     "Switch the selected SDWire's SD card between target and host",
@@ -49,7 +50,7 @@ func newSwitchCmd(flags *globalFlags) *cobra.Command {
 			}
 
 			if mode == sdwire.ModeTarget {
-				return switchToTarget(cmd, flags, cfg)
+				return switchToTarget(cmd, flags, cfg, noUnmount)
 			}
 
 			res, err := openSelected(flags.serial, cfg, true, warningOption(cmd))
@@ -59,16 +60,18 @@ func newSwitchCmd(flags *globalFlags) *cobra.Command {
 			return applyMode(cmd, flags, res, mode)
 		},
 	}
+	cmd.Flags().BoolVar(&noUnmount, "no-unmount", false,
+		"skip the automatic unmount of the card's volumes before switching to target mode")
 	return cmd
 }
 
 // applyMode switches res.sw to mode and closes it, so every switch path —
 // a live device or one just revived — releases its device handle the same
 // way.
-func applyMode(cmd *cobra.Command, flags *globalFlags, res *openResult, mode sdwire.SwitchMode) error {
+func applyMode(cmd *cobra.Command, flags *globalFlags, res *openResult, mode sdwire.SwitchMode, modeOpts ...sdwire.ModeOption) error {
 	defer res.sw.Close()
 	debugf(cmd, flags, "resolved device %s via selector %q", res.sw.Info().Identity(), res.selector)
-	if err := res.sw.SetMode(mode); err != nil {
+	if err := res.sw.SetMode(mode, modeOpts...); err != nil {
 		return opErrf("switching mode: %w", err)
 	}
 	return nil
@@ -81,10 +84,15 @@ func applyMode(cmd *cobra.Command, flags *globalFlags, res *openResult, mode sdw
 // just to confirm that, and switch it right back to where it already was,
 // would be pure churn, so the hub-port cache is consulted first; only a
 // device that isn't already in target mode gets revived.
-func switchToTarget(cmd *cobra.Command, flags *globalFlags, cfg *Config) error {
+func switchToTarget(cmd *cobra.Command, flags *globalFlags, cfg *Config, noUnmount bool) error {
+	var modeOpts []sdwire.ModeOption
+	if noUnmount {
+		modeOpts = append(modeOpts, sdwire.WithoutUnmount())
+	}
+
 	res, err := openSelected(flags.serial, cfg, false, warningOption(cmd))
 	if err == nil {
-		return applyMode(cmd, flags, res, sdwire.ModeTarget)
+		return applyMode(cmd, flags, res, sdwire.ModeTarget, modeOpts...)
 	}
 	if !errors.Is(err, sdwire.ErrNoDeviceFound) {
 		return err
@@ -99,5 +107,5 @@ func switchToTarget(cmd *cobra.Command, flags *globalFlags, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return applyMode(cmd, flags, res, sdwire.ModeTarget)
+	return applyMode(cmd, flags, res, sdwire.ModeTarget, modeOpts...)
 }
