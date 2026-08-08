@@ -1,11 +1,11 @@
 ---
 # SDW-1wub
 title: 'cobra+viper CLI: drop-in for Python sdwire plus helper commands'
-status: todo
+status: in-progress
 type: feature
 priority: normal
 created_at: 2026-08-08T10:05:58Z
-updated_at: 2026-08-08T10:06:47Z
+updated_at: 2026-08-08T18:13:33Z
 parent: SDW-1p8o
 blocked_by:
     - SDW-v0mc

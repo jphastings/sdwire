@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Install libusb (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev pkg-config
+
+      - name: Install libusb (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libusb pkg-config
+
+      # Windows: gousb links libusb-1.0 via cgo/pkg-config (see
+      # github.com/google/gousb's libusb.go), so a full `go build ./...` here
+      # needs a matching native libusb *and* a C toolchain GOOS=windows Go
+      # can actually cgo-compile with. The two realistic ways to get that in
+      # Actions are:
+      #
+      #  1. A vendored MSYS2/mingw-w64 toolchain (`setup-msys2` +
+      #     `pacman -S mingw-w64-x86_64-libusb`), building from inside the
+      #     MSYS2 shell with CC pointed at its gcc. This is the option that
+      #     would give real CI coverage of the cgo path on Windows, but it's
+      #     also the fragile one: it means mixing MSYS2's toolchain with the
+      #     official windows/amd64 Go toolchain, and getting pkg-config,
+      #     CGO_ENABLED, and PATH all agreeing inside a CI-only shell nobody
+      #     develops against day to day — exactly the kind of setup that
+      #     tends to bit-rot silently until a release build needs it.
+      #  2. Skip the cgo-dependent packages on Windows here, and only
+      #     validate the platform-independent ones.
+      #
+      # This workflow takes option 2: it's the one that can actually be
+      # verified without a live Windows+MSYS2 runner to iterate against, and
+      # a red, flaky Windows job on every PR is worse than a documented gap.
+      # Only internal/blockdev has no gousb (and therefore no cgo/libusb)
+      # dependency — every other package imports the root sdwire package (or
+      # gousb/hubpower directly), so it's the only subtree built, vetted, and
+      # tested on Windows below. Real Windows binaries (cmd/sdwire, which
+      # does need the cgo path) are expected to come from a maintainer's
+      # Windows box with libusb installed (see README), or a future
+      # dedicated release workflow that takes on the MSYS2 setup this job
+      # deliberately avoids.
+      - name: Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: go build ./...
+
+      - name: Build (Windows, cgo-independent packages only)
+        if: runner.os == 'Windows'
+        run: go build ./internal/...
+
+      - name: Vet (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: go vet ./...
+
+      - name: Vet (Windows, cgo-independent packages only)
+        if: runner.os == 'Windows'
+        run: go vet ./internal/...
+
+      - name: Test (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: go test ./...
+
+      - name: Test (Windows, cgo-independent packages only)
+        if: runner.os == 'Windows'
+        run: go test ./internal/...
+
+      - name: gofmt check
+        shell: bash
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi

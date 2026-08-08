@@ -1,0 +1,71 @@
+# GoReleaser config for the sdwire CLI (./cmd/sdwire).
+#
+# gousb (github.com/google/gousb) links against libusb via cgo, so these
+# builds are NOT reproducible cross-compiles from a single host: each
+# GOOS/GOARCH combination needs a *native* libusb toolchain for that
+# platform at build time. That means this file cannot simply be run once as
+# `goreleaser release` on one machine for every OS below — it's meant to be
+# run once per OS, in the CI matrix described in
+# .github/workflows/ci.yml (and mirrored by a future release workflow),
+# using GoReleaser v2's split-release flow:
+#
+#   # on each OS runner:
+#   goreleaser release --split
+#
+#   # once all OS jobs have uploaded their dist/ partials as artifacts, in a
+#   # final merge job that downloads them all into ./dist:
+#   goreleaser continue --merge
+#
+# See https://goreleaser.com/customization/partial/ for the split/merge
+# mechanics this relies on.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sdwire
+    main: ./cmd/sdwire
+    binary: sdwire
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: sdwire
+    ids: [sdwire]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # Individual OS jobs upload partial dist/ output as build artifacts, not
+  # GitHub releases; only the final merge job (goreleaser continue --merge)
+  # actually publishes to GitHub.
+  disable: true
