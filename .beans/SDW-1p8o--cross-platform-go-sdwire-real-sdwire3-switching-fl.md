@@ -1,11 +1,11 @@
 ---
 # SDW-1p8o
 title: 'Cross-platform Go sdwire: real SDWire3 switching, flash helper, power plugins, CLI'
-status: in-progress
+status: completed
 type: epic
 priority: normal
 created_at: 2026-08-08T10:05:23Z
-updated_at: 2026-08-08T15:02:52Z
+updated_at: 2026-08-08T19:20:00Z
 ---
 
 Make this Go port (forked/renamed to `github.com/jphastings/sdwire`) a complete, cross-platform replacement for the Python `sdwire` CLI, plus the pieces the bench actually needs: working SDWire3 target switching, a flash-cycle helper, per-device DUT power hooks, a Meross plug plugin, and a cobra/viper CLI.
@@ -28,3 +28,18 @@ Make this Go port (forked/renamed to `github.com/jphastings/sdwire`) a complete,
 ## Children
 
 Ordering: VBUS switching and the reorg/power-hooks come first; flash helper and Meross plugin build on them; the CLI lands last.
+
+## Summary of Changes
+
+The fork (github.com/jphastings/sdwire) is now a complete Go replacement for the Python sdwire CLI plus the bench helpers, all committed as conventional-commit chunks on main:
+
+- **Reorg + latent bugs (SDW-xlg1, SDW-uh3s, SDW-hjkk)**: multi-file package, SDWire-owned gousb context, serial+port-path identity (Python-compatible display form) with unambiguous selection, per-device PowerFunc + PowerCycle with ≥8s default dark time.
+- **SDWire3 VBUS switching (SDW-v0mc)**: hubpower/ package (port power, honest GetPortStatus readback, per-port/ganged detection, on-disk port cache keyed by identity); constructors revive powered-off devices via the cache; legacy detach+reset behind an option. Bench-verified both directions incl. fresh-process revive.
+- **FlashAndBoot (SDW-5eo5)**: identity-tied block-device detection (macOS ioreg — system_profiler is broken on macOS 26 — Linux sysfs, Windows WMI), ambiguity refusal, sector-aligned raw writes (bench-found alignment + fsync quirks), dark-time top-up. Bench-verified to the sudo boundary; write engine byte-exact on a real raw device.
+- **Meross plugin (SDW-q62d)**: local-API client (signed envelopes, SETACK-or-error, metering with unit conversion), credentials README.
+- **CLI (SDW-1wub)**: byte-compatible list/state/switch (verified against a captured Python v0.3.1 run), flash/power/disk/--json, viper config binding devices to power plugins, goreleaser + per-OS CI. Read-only commands never mutate hardware; power is USB-free.
+- **Safe unmount (SDW-or85)**: SetMode(ModeTarget) unmounts the reader's volumes by default (bench-verified), WithoutUnmount/--no-unmount to skip.
+
+Bench-hardening discovered and fixed along the way: the Realtek reader wedges if re-powered too quickly (now ≥5s dark + hub-port-status polling instead of full-bus enumeration during bring-up, one power-cycle retry); state readback made side-effect free (a state query must never revive a powered-off device).
+
+**Residuals** (tracked in standalone SDW-dhkl, needs JP): live Meross on/off (account key + which of 192.168.1.112/.114 is the bench plug), one sudo sdwire flash run with target boot, and a Mac reboot to clear the stale IOKit entry that blocks the old sdwire-reboot tool.

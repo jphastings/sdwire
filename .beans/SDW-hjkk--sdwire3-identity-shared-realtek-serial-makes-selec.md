@@ -1,11 +1,11 @@
 ---
 # SDW-hjkk
 title: 'SDWire3 identity: shared Realtek serial makes selection ambiguous'
-status: in-progress
+status: completed
 type: bug
 priority: normal
 created_at: 2026-08-08T10:05:24Z
-updated_at: 2026-08-08T15:20:37Z
+updated_at: 2026-08-08T19:19:30Z
 parent: SDW-xlg1
 ---
 
@@ -15,4 +15,8 @@ Fix: make device identity serial **plus bus/port path** — expose location in `
 
 - [x] `DeviceInfo` carries bus + port path (and a Python-compatible display string)
 - [x] Selection unambiguous with two identical-serial devices attached (unit-tested; ambiguous plain serial errors listing candidate identities)
-- [ ] Shared identity used by hub-power cache and CLI config
+- [x] Shared identity used by hub-power cache and CLI config — the on-disk hub-port cache is keyed by Identity() (verified live: ~/Library/Caches/sdwire/hubports.json key 20120501030900000.1.1.3), and the CLI config's per-device serial/location fields select via the same matching rules
+
+## Summary of Changes
+
+DeviceInfo carries Bus/PortPath with Python-compatible Identity() and sysfs-style Location(); NewWithSerial accepts the suffixed form and errors (listing candidates) on ambiguous plain serials; NewWithIdentity adds location selection. The same identity keys the hubpower on-disk cache and the CLI's config binding. Selection logic unit-tested with two identical-serial devices.

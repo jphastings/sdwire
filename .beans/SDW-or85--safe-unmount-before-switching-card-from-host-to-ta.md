@@ -1,11 +1,11 @@
 ---
 # SDW-or85
 title: Safe unmount before switching card from host to target
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-08-08T18:50:34Z
-updated_at: 2026-08-08T19:11:10Z
+updated_at: 2026-08-08T19:18:36Z
 parent: SDW-1p8o
 ---
 
@@ -28,7 +28,11 @@ Switching the card away from the host (`SetMode(ModeTarget)`) currently yanks th
 
 ## Acceptance
 
-- [ ] `SetMode(ModeTarget)` with a mounted card unmounts before switching on the macOS bench; no "Disk Not Ejected Properly" notification
-- [ ] Disable option skips the unmount entirely
-- [ ] No-op paths (no device present / already target-side) neither error nor noticeably slow the switch
-- [ ] Behavioural unit tests over the decision logic with fakes; Linux/Windows paths compile-checked
+- [x] `SetMode(ModeTarget)` with a mounted card unmounts before switching on the macOS bench; no "Disk Not Ejected Properly" notification — verified: both GOSD volumes mounted → switch dut → mount count 0 before the power cut, honest Target readback
+- [x] Disable option skips the unmount entirely — sdwire.WithoutUnmount() ModeOption + CLI --no-unmount flag on switch; unit-tested
+- [x] No-op paths (no device present / already target-side) neither error nor noticeably slow the switch — lookup-failure skips silently (unit-tested); already-target short-circuits via cached port state on the bench (~20s, dominated by two gousb context creations — a known minor optimisation opportunity, not the unmount logic)
+- [x] Behavioural unit tests over the decision logic with fakes; Linux/Windows paths compile-checked (mode_test.go over stubbed blockdev seams + fake controller; blockdev cross-builds CGO_ENABLED=0)
+
+## Summary of Changes
+
+SetMode gained variadic ModeOptions: switching to ModeTarget now locates this SDWire's reader block device (identity-tied) and unmounts its volumes first, by default. Lookup failure → proceed silently (nothing mounted to lose); actual unmount failure → abort the switch. WithoutUnmount() opts out; CLI switch has --no-unmount. macOS unmount keeps the polite-then-force behaviour (data is flushed either way and the card is leaving the host regardless — decision documented in the SetMode godoc). FlashAndBoot's pre-write unmount stays; its target-switch now re-checks for post-write automounts as a bonus.

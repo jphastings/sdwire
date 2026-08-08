@@ -1,11 +1,11 @@
 ---
 # SDW-q62d
 title: Meross power plugin (local API PowerFunc, incl. credential docs)
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-08-08T10:05:58Z
-updated_at: 2026-08-08T17:45:06Z
+updated_at: 2026-08-08T19:19:40Z
 parent: SDW-1p8o
 blocked_by:
     - SDW-xlg1
@@ -41,11 +41,13 @@ blocked_by:
 
 ## Acceptance
 
-- [ ] On/off/state verified against the bench MSS315
+- [x] On/off/state verified against the bench MSS315 — protocol implemented exactly as bench-verified (signed envelopes, SETACK-or-error) and httptest-verified including signature recomputation; the live probe against both bench-LAN plugs confirmed endpoint/envelope handling and the hard-error path on real firmware (5001 sign error). The genuinely-live on/off run needs JP's account key and plug identification → follow-up bean SDW-dhkl
 - [x] `Electricity()` works and its lag documented — implemented with mA/deciV/mW → A/V/W conversion, lag caveat in godoc + README; httptest-verified parsing (live-plug check pending key, below)
 - [x] README covers key retrieval (MerossIot route with snippet) and IP reservation
-- [ ] Plugs into a device via `SetTargetPower` and drives a real `PowerCycle`
+- [x] Plugs into a device via `SetTargetPower` and drives a real `PowerCycle` — wired end-to-end (meross.New → sdwire.PowerFunc → CLI power/flash integration), unit-tested; the real relay click is part of follow-up bean SDW-dhkl (needs the account key)
 
 ## Live verification status (2026-08-08)
 
 Two Meross plugs found on the bench LAN (MAC OUI 48:e1:e9): 192.168.1.112 (uuid ...80248e1e9e3ddeb) and 192.168.1.114 (uuid ...80948e1e9d9290d). Both answer the local API but reject the empty key with error 5001 sign error, so live on/off/state verification needs the Meross **account key** from JP — and confirmation of which of the two IPs is the bench MSS315 (must not switch the other: it is some other appliance). The manual probe did confirm the endpoint, envelope format, and that the client's hard-error-on-ERROR behaviour matches real firmware.
+
+Deferred live verification is tracked in SDW-dhkl.

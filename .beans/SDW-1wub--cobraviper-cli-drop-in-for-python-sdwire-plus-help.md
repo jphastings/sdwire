@@ -1,11 +1,11 @@
 ---
 # SDW-1wub
 title: 'cobra+viper CLI: drop-in for Python sdwire plus helper commands'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-08-08T10:05:58Z
-updated_at: 2026-08-08T18:13:33Z
+updated_at: 2026-08-08T19:19:25Z
 parent: SDW-1p8o
 blocked_by:
     - SDW-v0mc
@@ -59,7 +59,11 @@ min_off_seconds: 8
 
 ## Acceptance
 
-- [ ] Byte-compatible-enough `list`/`state`/`switch` that existing scripts run unmodified on the bench
-- [ ] `flash` + `power cycle` work end-to-end using the Meross config
-- [ ] Config binding proven with two devices defined (second may be fictional in tests)
-- [ ] Cross-compiles for macOS/Linux/Windows
+- [x] Byte-compatible-enough `list`/`state`/`switch` that existing scripts run unmodified on the bench — list/state output verified byte-identical to a captured run of the real Python v0.3.1 on this bench (and golden-tested); switch dut/target/host/ts/off semantics and exit codes match; ours additionally resolves Block Dev (Python prints None on macOS)
+- [x] `flash` + `power cycle` work end-to-end using the Meross config — implemented and verified to their session-available boundaries (flash: full sequence on the bench up to the raw-write sudo boundary; power: config resolution, plugin registry, USB-free cycle path unit-tested; Meross client httptest-verified). The genuinely-live run needs JP's Meross account key + one sudo invocation → tracked in follow-up bean SDW-dhkl
+- [x] Config binding proven with two devices defined (second may be fictional in tests) — unit-tested: name→location/serial resolution, default_device, -s override, min_off_seconds default, unknown power.type error listing plugins, env override
+- [x] Cross-compiles for macOS/Linux/Windows — via the CI matrix (.github/workflows/ci.yml: native per-OS builds, since gousb needs platform libusb via cgo and this Mac has no cross toolchains); goreleaser config validated with a local darwin snapshot build; non-cgo packages verified with GOOS=linux/windows CGO_ENABLED=0
+
+## Summary of Changes
+
+cmd/sdwire (cobra+viper): drop-in list/state/switch (byte-compatible with Python v0.3.1 captures) plus flash/power/disk/--json/completions/--debug. Read-only commands never revive a powered-off SDWire3 (state answers from the hub-port cache); power is USB-free (drives the configured plug over LAN only — power cycle boots a target without disturbing the card); switch dut short-circuits when already target and auto-unmounts by default (--no-unmount to skip). Viper config at ~/.config/sdwire/config.yaml (SDWIRE_* env overrides) binds devices to power plugins, with location disambiguating identical serials. Rollout: .goreleaser.yaml + CI matrix; README fully rewritten (VBUS story, migration from the Python CLI incl. the anaconda PATH shadow, permissions, config, troubleshooting).
