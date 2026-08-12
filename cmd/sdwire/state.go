@@ -44,16 +44,18 @@ func writeStateOutput(cmd *cobra.Command, jsonOut bool, identity, state string) 
 	return nil
 }
 
-// selectorForCache returns the selector to hand to sdwireCachedPortState:
-// the same selector openSelected would have used, or "" if neither -s nor
-// default_device named a device (CachedPortState's own "exactly one cached
-// entry" rule then applies).
-func selectorForCache(serialFlag string, cfg *Config) string {
-	sel := resolveSelection(serialFlag, cfg)
-	if !sel.named {
-		return ""
+// cachedPortStateFor reads hub-port state for sel from the on-disk cache,
+// retrying with a configured device's serial when its location — which may
+// name a socket the device has since been moved out of — matches no cache
+// entry, or several stale ones left by a previous occupant of that port.
+func cachedPortStateFor(sel selection, opts ...sdwire.Option) (sdwire.SwitchMode, string, error) {
+	mode, identity, err := sdwireCachedPortState(sel.cacheSelector(), opts...)
+	if err != nil && sel.fallback != "" {
+		if fallbackMode, fallbackIdentity, fallbackErr := sdwireCachedPortState(sel.fallback, opts...); fallbackErr == nil {
+			return fallbackMode, fallbackIdentity, nil
+		}
 	}
-	return sel.selector
+	return mode, identity, err
 }
 
 func newStateCmd(flags *globalFlags) *cobra.Command {
@@ -75,15 +77,16 @@ func newStateCmd(flags *globalFlags) *cobra.Command {
 				return opErrf("loading config: %w", err)
 			}
 
-			res, err := openSelected(flags.serial, cfg, false, warningOption(cmd))
+			res, err := openSelected(cmd, flags.serial, cfg, false)
 			if err != nil {
 				if !errors.Is(err, sdwire.ErrNoDeviceFound) {
 					return err
 				}
 
-				mode, identity, cacheErr := sdwireCachedPortState(selectorForCache(flags.serial, cfg), warningOption(cmd))
+				sel := resolveSelection(flags.serial, cfg)
+				mode, identity, cacheErr := cachedPortStateFor(sel, warningOption(cmd))
 				if cacheErr != nil {
-					return opErrf("reading device state: %w", cacheErr)
+					return opErrf("reading device state%s: %w", sel.originSuffix(), cacheErr)
 				}
 				debugf(cmd, flags, "resolved device %s via cached hub-port state (no live device)", identity)
 				return writeStateOutput(cmd, jsonOut, identity, mode.String())

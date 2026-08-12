@@ -2,10 +2,12 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/jphastings/sdwire"
+	"github.com/spf13/cobra"
 )
 
 func TestResolveSelection(t *testing.T) {
@@ -23,9 +25,9 @@ func TestResolveSelection(t *testing.T) {
 		cfg        *Config
 		want       selection
 	}{
-		{"named device prefers location over serial", "bench", cfg, selection{selector: "1-1.1.3", deviceName: "bench", named: true}},
-		{"named device without location falls back to serial", "second", cfg, selection{selector: "99999999999999999", deviceName: "second", named: true}},
-		{"default device honored when -s empty", "", cfg, selection{selector: "1-1.1.3", deviceName: "bench", named: true}},
+		{"named device prefers location, keeps serial as fallback", "bench", cfg, selection{selector: "1-1.1.3", fallback: "20120501030900000", origin: configOrigin("location", "bench"), deviceName: "bench", named: true}},
+		{"named device without location falls back to serial", "second", cfg, selection{selector: "99999999999999999", origin: configOrigin("serial", "second"), deviceName: "second", named: true}},
+		{"default device honored when -s empty", "", cfg, selection{selector: "1-1.1.3", fallback: "20120501030900000", origin: configOrigin("location", "bench"), deviceName: "bench", named: true}},
 		{"literal value used as-is when not a configured name", "1-2.3", cfg, selection{selector: "1-2.3", named: true}},
 		{"no selector and no default -> not named", "", &Config{}, selection{}},
 		{"nil config treated as empty", "literal", nil, selection{selector: "literal", named: true}},
@@ -33,7 +35,7 @@ func TestResolveSelection(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := resolveSelection(c.serialFlag, c.cfg)
-			if got.selector != c.want.selector || got.deviceName != c.want.deviceName || got.named != c.want.named {
+			if got.selector != c.want.selector || got.fallback != c.want.fallback || got.origin != c.want.origin || got.deviceName != c.want.deviceName || got.named != c.want.named {
 				t.Errorf("resolveSelection(%q, cfg) = %+v, want %+v", c.serialFlag, got, c.want)
 			}
 		})
@@ -82,7 +84,7 @@ func TestOpenSelectedNoSelectorZeroDevices(t *testing.T) {
 	sdwireListDevices = func() ([]*sdwire.DeviceInfo, error) { return nil, nil }
 	t.Cleanup(func() { sdwireListDevices = orig })
 
-	_, err := openSelected("", &Config{}, false)
+	_, err := openSelected(&cobra.Command{}, "", &Config{}, false)
 	if err == nil || !strings.Contains(err.Error(), "no SDWire devices found") {
 		t.Fatalf("openSelected error = %v", err)
 	}
@@ -106,7 +108,7 @@ func TestOpenSelectedNoSelectorZeroDevicesReviveCallsSdwireNew(t *testing.T) {
 		return nil, errors.New("stub sdwireNew failure")
 	}
 
-	_, err := openSelected("", &Config{}, true)
+	_, err := openSelected(&cobra.Command{}, "", &Config{}, true)
 	if !called {
 		t.Error("expected sdwireNew to be called so the SDK's cache fallback can revive the sole cached device")
 	}
@@ -125,7 +127,7 @@ func TestOpenSelectedNoSelectorZeroDevicesNoReviveNeverCallsSdwireNew(t *testing
 		return nil, nil
 	}
 
-	_, err := openSelected("", &Config{}, false)
+	_, err := openSelected(&cobra.Command{}, "", &Config{}, false)
 	if err == nil || !errors.Is(err, sdwire.ErrNoDeviceFound) {
 		t.Fatalf("openSelected error = %v, want it to wrap sdwire.ErrNoDeviceFound", err)
 	}
@@ -141,7 +143,7 @@ func TestOpenSelectedNoSelectorMultipleDevicesListsCandidates(t *testing.T) {
 	}
 	t.Cleanup(func() { sdwireListDevices = orig })
 
-	_, err := openSelected("", &Config{}, false)
+	_, err := openSelected(&cobra.Command{}, "", &Config{}, false)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -163,7 +165,7 @@ func TestOpenSelectedNoSelectorSingleDeviceConnectsByIdentity(t *testing.T) {
 		return nil, errors.New("stub connect failure")
 	}
 
-	_, err := openSelected("", &Config{}, false)
+	_, err := openSelected(&cobra.Command{}, "", &Config{}, false)
 	if connectedWith != "solo.3" {
 		t.Errorf("connected with %q, want the sole device's identity solo.3", connectedWith)
 	}
@@ -188,9 +190,100 @@ func TestOpenSelectedNamedSkipsEnumeration(t *testing.T) {
 	}
 	t.Cleanup(func() { sdwireListDevices, sdwireNewWithSerial = origList, origSerial })
 
-	_, _ = openSelected("20120501030900000", &Config{}, false)
+	_, _ = openSelected(&cobra.Command{}, "20120501030900000", &Config{}, false)
 	if listCalled {
 		t.Error("openSelected should not enumerate devices when a selector is given")
+	}
+}
+
+func TestOpenSelectedLocationFallsBackToSerialOnFailure(t *testing.T) {
+	origIdentity, origSerial := sdwireNewWithIdentity, sdwireNewWithSerial
+	t.Cleanup(func() { sdwireNewWithIdentity, sdwireNewWithSerial = origIdentity, origSerial })
+
+	errLocation := fmt.Errorf("stub: nothing at that location: %w", sdwire.ErrNoDeviceFound)
+	errSerial := fmt.Errorf("stub: nothing with that serial: %w", sdwire.ErrNoDeviceFound)
+
+	var tried []string
+	sdwireNewWithIdentity = func(id string, opts ...sdwire.Option) (*sdwire.SDWire, error) {
+		tried = append(tried, id)
+		return nil, errLocation
+	}
+	sdwireNewWithSerial = func(serial string, opts ...sdwire.Option) (*sdwire.SDWire, error) {
+		tried = append(tried, serial)
+		return nil, errSerial
+	}
+
+	cfg := &Config{Devices: map[string]DeviceConfig{
+		"bench": {Location: "1-1.1.3", Serial: "20120501030900000"},
+	}}
+
+	_, err := openSelected(&cobra.Command{}, "bench", cfg, false)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(tried) != 2 || tried[0] != "1-1.1.3" || tried[1] != "20120501030900000" {
+		t.Errorf("selectors tried = %v, want [1-1.1.3 20120501030900000] (location first, then serial fallback)", tried)
+	}
+	for _, want := range []string{"bench", "1-1.1.3", "20120501030900000"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err.Error(), want)
+		}
+	}
+	// A non-nil *sdwire.SDWire can't be constructed from this package, so a
+	// successful fallback can't be exercised end-to-end; this at least
+	// proves both underlying errors survive into the combined error.
+	if !errors.Is(err, sdwire.ErrNoDeviceFound) {
+		t.Errorf("expected errors.Is(err, sdwire.ErrNoDeviceFound): %v", err)
+	}
+	if !errors.Is(err, errLocation) {
+		t.Errorf("expected errors.Is(err, errLocation): %v", err)
+	}
+	if !errors.Is(err, errSerial) {
+		t.Errorf("expected errors.Is(err, errSerial): %v", err)
+	}
+}
+
+func TestOpenSelectedLiteralSelectorNotRetriedOnFailure(t *testing.T) {
+	origIdentity, origSerial := sdwireNewWithIdentity, sdwireNewWithSerial
+	t.Cleanup(func() { sdwireNewWithIdentity, sdwireNewWithSerial = origIdentity, origSerial })
+
+	calls := 0
+	sdwireNewWithSerial = func(serial string, opts ...sdwire.Option) (*sdwire.SDWire, error) {
+		calls++
+		return nil, fmt.Errorf("stub: %w", sdwire.ErrNoDeviceFound)
+	}
+	sdwireNewWithIdentity = func(id string, opts ...sdwire.Option) (*sdwire.SDWire, error) {
+		t.Fatal("sdwireNewWithIdentity should not be called for a bare-serial literal selector")
+		return nil, nil
+	}
+
+	_, err := openSelected(&cobra.Command{}, "20120501030900000", &Config{}, false)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if calls != 1 {
+		t.Errorf("sdwireNewWithSerial called %d times, want exactly 1 (a literal selector has no fallback to retry)", calls)
+	}
+}
+
+func TestOpenSelectedConfigSerialOnlyOriginNamedInError(t *testing.T) {
+	origSerial := sdwireNewWithSerial
+	t.Cleanup(func() { sdwireNewWithSerial = origSerial })
+	sdwireNewWithSerial = func(serial string, opts ...sdwire.Option) (*sdwire.SDWire, error) {
+		return nil, fmt.Errorf("stub: %w", sdwire.ErrNoDeviceFound)
+	}
+
+	cfg := &Config{Devices: map[string]DeviceConfig{
+		"second": {Serial: "99999999999999999"},
+	}}
+
+	_, err := openSelected(&cobra.Command{}, "second", cfg, false)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	want := `from the "serial" of config device "second"`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q missing origin %q", err.Error(), want)
 	}
 }
 

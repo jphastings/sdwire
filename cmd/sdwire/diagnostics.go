@@ -23,3 +23,10 @@ func debugf(cmd *cobra.Command, flags *globalFlags, format string, args ...any) 
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "debug: "+format+"\n", args...)
 }
+
+// warnf prints a CLI-level warning line to cmd's stderr, unconditionally —
+// like the SDK warnings routed through warningOption, these aren't gated
+// by --debug.
+func warnf(cmd *cobra.Command, format string, args ...any) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "warning: "+format+"\n", args...)
+}

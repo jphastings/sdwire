@@ -1,11 +1,11 @@
 ---
 # SDW-ox5r
 title: A stale config location, and flash's silent skipped power cycle, together fake a dead board
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-08-12T10:16:28Z
-updated_at: 2026-08-12T10:16:28Z
+updated_at: 2026-08-12T14:56:45Z
 ---
 
 Found during a long GoSD bench session on 2026-08-12. Two independent
@@ -102,3 +102,59 @@ looking for a second physical mux.
 (2) is the one worth doing even if the others are declined: it is the
 difference between a five-second diagnosis and an hour of suspecting the
 hardware.
+
+
+## Summary of Changes
+
+All three, plus the cache ghosts behind the ambiguity.
+
+**1. Stale `location:` no longer fatal.** `resolveSelection` keeps a
+configured device's serial as `sel.fallback` when it also has a location.
+`openSelected` still tries the location first (it is the more specific
+selector, and identical Realtek serials need it), but on failure retries by
+serial and warns:
+
+> warning: config device "bench": no SDWire device is at its configured
+> location "1-1.1.3"; connected by serial instead, now at location "1-1.1.4"
+> — update or remove that location: line in your config
+
+The cached-hub-port path (`state`, `switch dut` on a powered-off SDWire3)
+gets the same fallback via the new `cachedPortStateFor`. When both
+selectors fail the error names the config device and both attempts, and
+wraps both underlying errors so `errors.Is(…, ErrNoDeviceFound)` still
+works for callers.
+
+**2. `flash` is loud about a skipped power cycle.** The debug-only `else`
+branch is gone. After a successful flash with no power plugin it prints, to
+stderr, consequence first and configuration second — reusing `sdwire
+power`'s YAML snippet (now factored out as `powerConfigSnippet`) with the
+device's *live* location filled in. `--require-power` refuses upfront
+instead, before anything is written.
+
+**3. The ambiguity error names its input.** Selectors read from config
+carry an `origin` (`from the "location" of config device "bench"`), which
+is appended to connect and state errors. The reported failure now reads:
+
+> Error: reading device state (from the "location" of config device
+> "bench"): location 1-1.1.3 matches multiple SDWire devices; specify one
+> of: unknown.1.1.3, 20120501030900000.1.1.3
+
+**4. The ghost entries.** `hubpower.Cache.Put` now evicts any entry under a
+different key naming the same physical hub port. That pair — `unknown.1.1.3`
+and `20120501030900000.1.1.3`, verified to hold identical `PortRef`s in the
+bench's real cache — is the same device recorded before and after its serial
+could be read; only one device can be in a port, so the older key is stale by
+definition. This is what made the location lookup ambiguous.
+
+README: the flash section documents the warning and `--require-power`; the
+config section documents the location→serial fallback; the SDWire3 state
+semantics section now says where the hub-port cache file actually lives
+(`<user cache dir>/sdwire/hubports.json`, not the config directory) and that
+deleting it is safe — the bean's "there is no cache file to remove".
+
+Not done: entries already in an existing cache aren't retroactively deduped,
+and a serial fallback against the *cache* is still ambiguous for a device
+that has been seen at several ports over its life (three such entries exist
+on the bench). The live-device path — the reported bug — resolves before
+reaching the cache, so this only bites a powered-off SDWire3 with a stale
+config location. Deleting hubports.json clears it.

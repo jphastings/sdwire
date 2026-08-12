@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,6 +60,55 @@ func TestStateCommandFallsBackToCachedPortStateWhenNoLiveDevice(t *testing.T) {
 	want := formatStateHeader() + formatStateRow("20120501030900000.1.1.3", "Target")
 	if buf.String() != want {
 		t.Errorf("output = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestCachedPortStateForFallsBackToSerialOnLookupFailure(t *testing.T) {
+	orig := sdwireCachedPortState
+	t.Cleanup(func() { sdwireCachedPortState = orig })
+
+	var tried []string
+	sdwireCachedPortState = func(selector string, opts ...sdwire.Option) (sdwire.SwitchMode, string, error) {
+		tried = append(tried, selector)
+		if selector == "1-1.1.3" {
+			return sdwire.ModeUnknown, "", errors.New("no cache entry at that location")
+		}
+		return sdwire.ModeTarget, "20120501030900000.1.1.3", nil
+	}
+
+	sel := selection{selector: "1-1.1.3", fallback: "20120501030900000", named: true}
+	mode, identity, err := cachedPortStateFor(sel)
+	if err != nil {
+		t.Fatalf("cachedPortStateFor: %v", err)
+	}
+	if mode != sdwire.ModeTarget || identity != "20120501030900000.1.1.3" {
+		t.Errorf("got mode=%v identity=%q", mode, identity)
+	}
+	if len(tried) != 2 || tried[0] != "1-1.1.3" || tried[1] != "20120501030900000" {
+		t.Errorf("selectors tried = %v, want [1-1.1.3 20120501030900000] (location first, then serial fallback)", tried)
+	}
+}
+
+func TestCachedPortStateForReturnsFirstResultOnSuccess(t *testing.T) {
+	orig := sdwireCachedPortState
+	t.Cleanup(func() { sdwireCachedPortState = orig })
+
+	calls := 0
+	sdwireCachedPortState = func(selector string, opts ...sdwire.Option) (sdwire.SwitchMode, string, error) {
+		calls++
+		return sdwire.ModeHost, "20120501030900000.1.1.3", nil
+	}
+
+	sel := selection{selector: "1-1.1.3", fallback: "20120501030900000", named: true}
+	mode, identity, err := cachedPortStateFor(sel)
+	if err != nil {
+		t.Fatalf("cachedPortStateFor: %v", err)
+	}
+	if mode != sdwire.ModeHost || identity != "20120501030900000.1.1.3" {
+		t.Errorf("got mode=%v identity=%q", mode, identity)
+	}
+	if calls != 1 {
+		t.Errorf("sdwireCachedPortState called %d times, want 1 (no fallback needed on success)", calls)
 	}
 }
 

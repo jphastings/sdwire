@@ -41,6 +41,62 @@ func TestCacheSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCachePutEvictsOtherKeyAtSamePort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hubports.json")
+
+	c, err := LoadCache(path)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	// A cache-by-serial entry written before the device's serial could be
+	// read, superseded once it's known — the "unknown.1.1.3" /
+	// "20120501030900000.1.1.3" pair that made a bench's location lookup
+	// ambiguous.
+	c.Put("unknown.1.1.3", &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 3})
+	c.Put("20120501030900000.1.1.3", &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 3})
+
+	if got := c.Get("unknown.1.1.3"); got != nil {
+		t.Errorf("Get(unknown.1.1.3) = %+v, want nil (evicted by a later Put at the same port)", got)
+	}
+	if got := c.Get("20120501030900000.1.1.3"); got == nil {
+		t.Error("Get(20120501030900000.1.1.3) = nil, want the entry just Put")
+	}
+}
+
+func TestCachePutKeepsEntriesForOtherPorts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hubports.json")
+
+	c, err := LoadCache(path)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	c.Put("device-a", &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 3})
+	c.Put("device-b", &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 4})
+
+	if got := c.Get("device-a"); got == nil {
+		t.Error("Get(device-a) = nil, want the entry retained (different port than device-b)")
+	}
+	if got := c.Get("device-b"); got == nil {
+		t.Error("Get(device-b) = nil, want the entry just Put")
+	}
+}
+
+func TestCachePutOverwritesSameKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hubports.json")
+
+	c, err := LoadCache(path)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	c.Put("device-key", &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 3})
+	updated := &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 4}
+	c.Put("device-key", updated)
+
+	if got := c.Get("device-key"); got == nil || !reflect.DeepEqual(got, updated) {
+		t.Errorf("Get(device-key) = %+v, want %+v", got, updated)
+	}
+}
+
 func TestCacheDeleteRemovesEntryAcrossSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hubports.json")
 

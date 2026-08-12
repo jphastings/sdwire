@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -96,11 +97,29 @@ func (c *Cache) Get(key string) *PortRef {
 	return c.entries[key]
 }
 
-// Put records ref as the PortRef for key.
+// Put records ref as the PortRef for key, dropping any entry under a
+// different key that names the same physical hub port. Only one device can
+// be attached to a port at a time, so an entry left from that port's
+// previous occupant — most often the same device cached under a different
+// identity, before and after its serial could be read — is stale by
+// definition, and leaving it behind makes a later lookup by location
+// ambiguous.
 func (c *Cache) Put(key string, ref *PortRef) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for k, entry := range c.entries {
+		if k != key && samePort(entry, ref) {
+			delete(c.entries, k)
+		}
+	}
 	c.entries[key] = ref
+}
+
+// samePort reports whether a and b name the same downstream port of the
+// same hub. The recorded hub vendor/product are deliberately not compared:
+// they describe the hub, not which port of it this is.
+func samePort(a, b *PortRef) bool {
+	return a.Bus == b.Bus && a.Port == b.Port && slices.Equal(a.HubPath, b.HubPath)
 }
 
 // Delete removes any cached PortRef for key.

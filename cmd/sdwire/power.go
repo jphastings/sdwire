@@ -13,11 +13,11 @@ import (
 // verified in tests without actually blocking a test run.
 var sleepFn = time.Sleep
 
-// explainMissingPowerConfig describes what to add to the config file so
+// powerConfigSnippet renders a ready-to-paste "power" config section for
 // deviceName (or, if it wasn't resolved from a configured device name, a
-// placeholder key) gets power control. location, if non-empty, is filled
-// in as a ready-to-use selector for the device actually connected to.
-func explainMissingPowerConfig(deviceName, location string) string {
+// placeholder key). location, if non-empty, is filled in as a ready-to-use
+// selector for the device actually connected to.
+func powerConfigSnippet(deviceName, location string) string {
 	key := deviceName
 	if key == "" {
 		key = "mydevice"
@@ -28,7 +28,6 @@ func explainMissingPowerConfig(deviceName, location string) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "no power control is configured for this device.\n\n")
 	fmt.Fprintf(&b, "Add a \"power\" section to your config file (~/.config/sdwire/config.yaml):\n\n")
 	fmt.Fprintf(&b, "devices:\n")
 	fmt.Fprintf(&b, "  %s:\n", key)
@@ -40,6 +39,25 @@ func explainMissingPowerConfig(deviceName, location string) string {
 	fmt.Fprintf(&b, "      # channel: 0\n\n")
 	fmt.Fprintf(&b, "Registered power plugin types: %s\n", strings.Join(registeredPowerTypes(), ", "))
 	return b.String()
+}
+
+// explainMissingPowerConfig describes what to add to the config file so
+// deviceName gets power control; see powerConfigSnippet for the
+// deviceName/location placeholder rules.
+func explainMissingPowerConfig(deviceName, location string) string {
+	return "no power control is configured for this device.\n\n" + powerConfigSnippet(deviceName, location)
+}
+
+// explainSkippedPowerCycle is what flash prints once it has written a card
+// for a device with no power plugin. A successful-looking flash whose
+// target was never restarted is indistinguishable from a dead board, a bad
+// image or bad wiring, so the consequence is stated first and the
+// configuration second.
+func explainSkippedPowerCycle(deviceName, location string) string {
+	return "no power control is configured for this device: the card was written, but the " +
+		"target was NOT power-cycled — it is still running whatever it was before, not the " +
+		"image just flashed.\n\nPower-cycle the target yourself, or configure power control " +
+		"so `sdwire flash` can do it:\n\n" + powerConfigSnippet(deviceName, location)
 }
 
 // resolvePowerSelection decides which configured device's power block the

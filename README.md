@@ -108,6 +108,14 @@ sudo sdwire flash ./ubuntu-24.04-preinstalled.img.xz -s bench
 flashed 1234 / 3800 MiB (32%)
 ```
 
+Without a power plugin configured for the device the flash still happens,
+but nothing power-cycles the target afterwards: it carries on running
+whatever it was before, which is indistinguishable from a board that won't
+boot the image you just wrote. `flash` says so on stderr when it finishes,
+and prints the config snippet that would fix it. `--require-power` turns
+that into an error before any writing starts — worth it in scripts, where
+a warning nobody reads is no use.
+
 ### `sdwire power {on|off|cycle}`
 
 Drive the [power plugin](#power-plugins) configured for the selected
@@ -201,10 +209,14 @@ min_off_seconds: 8
 ```
 
 - `default_device` is used whenever `-s/--serial` isn't given.
-- Each entry under `devices` names a device you can pass to `-s`; its
-  `location` is preferred over `serial` when selecting the device (more
+- Each entry under `devices` names a device you can pass to `-s`; either
+  key alone is enough. Given both, `location` is tried first (more
   specific — needed because every Realtek SDWire3 reader shares the same
-  hardcoded USB serial number), but either alone is enough.
+  hardcoded USB serial number) and `serial` is the fallback: a location
+  names the socket the device is plugged into, so moving it to another
+  port makes the location stale. Commands then find the device by serial
+  and warn that the `location:` line wants updating, rather than reporting
+  the device missing.
 - `power` configures a power plugin for that device — see below. A device
   with no `power` section works fine for `list`/`state`/`switch`/`flash`;
   only `sdwire power` requires one.
@@ -256,6 +268,14 @@ device that's already in target mode is also a no-op. Only commands that
 need the SD card to actually move data — `switch host`/`ts` and `flash` —
 revive a powered-off SDWire3 via the cache, since restoring power is
 inherent to what those commands do.
+
+That cache is a separate file from your config, at `<user cache
+dir>/sdwire/hubports.json` — `~/Library/Caches/sdwire/hubports.json` on
+macOS, `~/.cache/sdwire/hubports.json` on Linux,
+`%LocalAppData%\sdwire\hubports.json` on Windows. Any command that finds a
+device live rewrites its entry, so deleting the file is safe: the worst
+that happens is a device sitting in target mode can't be found again until
+it's powered back on some other way.
 
 ## Permissions
 

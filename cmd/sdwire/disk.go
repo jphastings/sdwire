@@ -35,7 +35,7 @@ func newDiskCmd(flags *globalFlags) *cobra.Command {
 				return opErrf("loading config: %w", err)
 			}
 
-			res, err := openSelected(flags.serial, cfg, false, warningOption(cmd))
+			res, err := openSelected(cmd, flags.serial, cfg, false)
 			if err != nil {
 				return err
 			}

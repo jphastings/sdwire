@@ -53,7 +53,7 @@ func newSwitchCmd(flags *globalFlags) *cobra.Command {
 				return switchToTarget(cmd, flags, cfg, noUnmount)
 			}
 
-			res, err := openSelected(flags.serial, cfg, true, warningOption(cmd))
+			res, err := openSelected(cmd, flags.serial, cfg, true)
 			if err != nil {
 				return err
 			}
@@ -90,7 +90,7 @@ func switchToTarget(cmd *cobra.Command, flags *globalFlags, cfg *Config, noUnmou
 		modeOpts = append(modeOpts, sdwire.WithoutUnmount())
 	}
 
-	res, err := openSelected(flags.serial, cfg, false, warningOption(cmd))
+	res, err := openSelected(cmd, flags.serial, cfg, false)
 	if err == nil {
 		return applyMode(cmd, flags, res, sdwire.ModeTarget, modeOpts...)
 	}
@@ -98,12 +98,12 @@ func switchToTarget(cmd *cobra.Command, flags *globalFlags, cfg *Config, noUnmou
 		return err
 	}
 
-	if cachedMode, identity, cacheErr := sdwireCachedPortState(selectorForCache(flags.serial, cfg), warningOption(cmd)); cacheErr == nil && cachedMode == sdwire.ModeTarget {
+	if cachedMode, identity, cacheErr := cachedPortStateFor(resolveSelection(flags.serial, cfg), warningOption(cmd)); cacheErr == nil && cachedMode == sdwire.ModeTarget {
 		debugf(cmd, flags, "device %s already in target mode (cached hub-port state); nothing to do", identity)
 		return nil
 	}
 
-	res, err = openSelected(flags.serial, cfg, true, warningOption(cmd))
+	res, err = openSelected(cmd, flags.serial, cfg, true)
 	if err != nil {
 		return err
 	}

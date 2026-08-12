@@ -10,9 +10,18 @@ import (
 
 func TestExplainMissingPowerConfig(t *testing.T) {
 	msg := explainMissingPowerConfig("bench", "1-1.1.3")
-	for _, want := range []string{"power:", "type: meross", "bench", "1-1.1.3", "meross"} {
+	for _, want := range []string{"no power control is configured for this device.", "power:", "type: meross", "bench", "1-1.1.3", "meross"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("explainMissingPowerConfig output missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestExplainSkippedPowerCycle(t *testing.T) {
+	msg := explainSkippedPowerCycle("bench", "1-1.1.3")
+	for _, want := range []string{"NOT power-cycled", "type: meross", "bench", "1-1.1.3"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("explainSkippedPowerCycle output missing %q:\n%s", want, msg)
 		}
 	}
 }

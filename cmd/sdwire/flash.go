@@ -23,13 +23,17 @@ func formatFlashProgress(written, total int64) string {
 }
 
 func newFlashCmd(flags *globalFlags) *cobra.Command {
+	var requirePower bool
+
 	cmd := &cobra.Command{
 		Use:   "flash <image>",
 		Short: "Write an image to the selected SDWire's SD card and boot the target from it",
 		Long: "Write an image to the selected SDWire's SD card and boot the target from it: " +
 			"powers the target off (if a power plugin is configured), switches to host mode, " +
 			"raw-writes the image, switches back to target mode, and powers the target back " +
-			"on.\n\n" +
+			"on. Without a power plugin configured, the flash still happens, but the target is " +
+			"left running whatever it was before — it is never power-cycled onto the new " +
+			"image. Pass --require-power to turn that into an upfront error instead.\n\n" +
 			"Raw disk writes need elevated privileges: run this with sudo on macOS/Linux, " +
 			"or as Administrator on Windows.",
 		Args: cobra.ExactArgs(1),
@@ -41,7 +45,12 @@ func newFlashCmd(flags *globalFlags) *cobra.Command {
 				return opErrf("loading config: %w", err)
 			}
 
-			res, err := openSelected(flags.serial, cfg, true, warningOption(cmd))
+			sel := resolveSelection(flags.serial, cfg)
+			if requirePower && sel.powerCfg == nil {
+				return opErrf("--require-power: %s", explainMissingPowerConfig(sel.deviceName, cfg.Devices[sel.deviceName].Location))
+			}
+
+			res, err := openSelected(cmd, flags.serial, cfg, true)
 			if err != nil {
 				return err
 			}
@@ -55,8 +64,6 @@ func newFlashCmd(flags *globalFlags) *cobra.Command {
 					return opErrf("building power control: %w", err)
 				}
 				res.sw.SetTargetPower(powerFunc)
-			} else {
-				debugf(cmd, flags, "no power plugin configured; target will not be power-cycled after flashing")
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -73,8 +80,17 @@ func newFlashCmd(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return opErrf("flashing %s: %w", imagePath, err)
 			}
+
+			// Printed last, not before the flash: it's the last thing on
+			// screen, right where the operator is looking when they wonder
+			// why the target didn't come up.
+			if res.powerCfg == nil {
+				warnf(cmd, "%s", explainSkippedPowerCycle(res.deviceName, res.sw.Info().Location()))
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&requirePower, "require-power", false,
+		"fail before flashing if the selected device has no power plugin configured, instead of warning afterwards that the target wasn't power-cycled")
 	return cmd
 }
