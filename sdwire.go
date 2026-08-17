@@ -182,6 +182,79 @@ func ListDevices() ([]*DeviceInfo, error) {
 	return devices, nil
 }
 
+// DeviceState is an SDWire and the mode its card is currently switched to.
+type DeviceState struct {
+	Info DeviceInfo
+	Mode SwitchMode
+	// Attached reports whether the device was enumerated on USB. False
+	// means it is known only from the hub-port cache: its remembered port
+	// is either unpowered (an SDWire3 in target mode) or powered with
+	// nothing enumerated on it — an empty socket, or a reader that has
+	// stopped answering and been torn off the bus by the OS.
+	Attached bool
+}
+
+// ListDeviceStates returns every SDWire this host knows about, with the mode
+// each one's card is switched to: the devices currently enumerated on USB,
+// plus every hub-port cache entry that is not currently producing one.
+//
+// It never powers a port on or off — an SDWire3 sitting in target mode stays
+// there — so unlike the New-family constructors it is safe to call just to
+// see what is around. Cache-derived entries are a claim about a remembered
+// location rather than a device seen now: see DeviceState.Attached.
+func ListDeviceStates(opts ...Option) ([]DeviceState, error) {
+	o := defaultOptions()
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	ctx := gousb.NewContext()
+	defer ctx.Close()
+
+	devs, err := ctx.OpenDevices(matchesSDWire)
+	defer closeDevices(devs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find USB devices: %w", err)
+	}
+
+	states := make([]DeviceState, 0, len(devs))
+	attached := make(map[string]bool, len(devs))
+	for _, dev := range devs {
+		info := *describeDevice(dev)
+		attached[info.Location()] = true
+		states = append(states, DeviceState{Info: info, Mode: attachedMode(dev, info, o), Attached: true})
+	}
+
+	cached, err := cachedDeviceStates(ctx, o, attached)
+	if err != nil {
+		o.warnFunc(fmt.Sprintf("reading hub-port cache: %v", err))
+		return states, nil
+	}
+	return append(states, cached...), nil
+}
+
+// attachedMode reports the mode of a device that is currently enumerated.
+// An SDWire3 leaves host mode only by losing power, which drops it off the
+// bus, so an enumerated one has its card on the host by construction — but
+// not under WithLegacySDWire3Switching, whose mechanism leaves the device
+// enumerated in both modes with no honest readback. An SDWireC stays
+// enumerated either way and is asked directly.
+func attachedMode(dev *gousb.Device, info DeviceInfo, o *options) SwitchMode {
+	if info.Generation == GenerationSDWire3 {
+		if o.legacySDWire3 {
+			return ModeUnknown
+		}
+		return ModeHost
+	}
+
+	mode, err := (&sdwireCController{device: dev}).Mode()
+	if err != nil {
+		o.warnFunc(fmt.Sprintf("reading mode of %s: %v", info.Identity(), err))
+		return ModeUnknown
+	}
+	return mode
+}
+
 type deviceMatch struct {
 	dev  *gousb.Device
 	info DeviceInfo

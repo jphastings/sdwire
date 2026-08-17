@@ -59,6 +59,7 @@ func newRootCmd() *cobra.Command {
 		newListCmd(flags),
 		newStateCmd(flags),
 		newSwitchCmd(flags),
+		newReviveCmd(flags),
 		newFlashCmd(flags),
 		newPowerCmd(flags),
 		newDiskCmd(flags),

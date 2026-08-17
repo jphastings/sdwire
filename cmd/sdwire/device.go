@@ -12,12 +12,14 @@ import (
 // Indirections over the SDK's device-touching entry points, swapped out in
 // tests so command logic can be exercised without real hardware.
 var (
-	sdwireListDevices     = sdwire.ListDevices
-	sdwireNewWithIdentity = sdwire.NewWithIdentity
-	sdwireNewWithSerial   = sdwire.NewWithSerial
-	sdwireNew             = sdwire.New
-	sdwireCachedPortState = sdwire.CachedPortState
-	blockdevFind          = blockdev.Find
+	sdwireListDevices      = sdwire.ListDevices
+	sdwireListDeviceStates = sdwire.ListDeviceStates
+	sdwireNewWithIdentity  = sdwire.NewWithIdentity
+	sdwireNewWithSerial    = sdwire.NewWithSerial
+	sdwireNew              = sdwire.New
+	sdwireCachedPortState  = sdwire.CachedPortState
+	sdwireRevive           = sdwire.Revive
+	blockdevFind           = blockdev.Find
 )
 
 // selection describes how a -s/--serial value (or a config's

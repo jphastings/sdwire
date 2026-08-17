@@ -90,6 +90,8 @@ func TestStatusToMode(t *testing.T) {
 }
 
 func TestSelectCacheEntry(t *testing.T) {
+	const cachePath = "/cache/hubports.json"
+
 	twoEntries := map[string]*hubpower.PortRef{
 		"20120501030900000.1.1.3": {Bus: 1, HubPath: []int{1, 1}, Port: 3},
 		"20120501030900000.1.1.4": {Bus: 1, HubPath: []int{1, 1}, Port: 4},
@@ -97,7 +99,7 @@ func TestSelectCacheEntry(t *testing.T) {
 
 	t.Run("empty selector requires exactly one entry", func(t *testing.T) {
 		sole := map[string]*hubpower.PortRef{"solo.1.2.3": {Bus: 1, HubPath: []int{1, 2}, Port: 3}}
-		key, ref, err := selectCacheEntry(sole, "")
+		key, ref, err := selectCacheEntry(sole, "", cachePath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -107,7 +109,7 @@ func TestSelectCacheEntry(t *testing.T) {
 	})
 
 	t.Run("empty selector with multiple entries is ambiguous", func(t *testing.T) {
-		_, _, err := selectCacheEntry(twoEntries, "")
+		_, _, err := selectCacheEntry(twoEntries, "", cachePath)
 		if err == nil {
 			t.Fatal("expected an error")
 		}
@@ -117,7 +119,7 @@ func TestSelectCacheEntry(t *testing.T) {
 	})
 
 	t.Run("suffixed identity selector matches", func(t *testing.T) {
-		key, _, err := selectCacheEntry(twoEntries, "20120501030900000.1.1.4")
+		key, _, err := selectCacheEntry(twoEntries, "20120501030900000.1.1.4", cachePath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -127,7 +129,7 @@ func TestSelectCacheEntry(t *testing.T) {
 	})
 
 	t.Run("location selector matches", func(t *testing.T) {
-		key, _, err := selectCacheEntry(twoEntries, "1-1.1.3")
+		key, _, err := selectCacheEntry(twoEntries, "1-1.1.3", cachePath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -143,7 +145,7 @@ func TestSelectCacheEntry(t *testing.T) {
 		// the CLI's connectSelector avoids routing bare serials through
 		// NewWithIdentity at all.
 		sole := map[string]*hubpower.PortRef{"20120501030900000.1.2.3": {Bus: 1, HubPath: []int{1, 2}, Port: 3}}
-		key, _, err := selectCacheEntry(sole, "20120501030900000")
+		key, _, err := selectCacheEntry(sole, "20120501030900000", cachePath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -153,11 +155,52 @@ func TestSelectCacheEntry(t *testing.T) {
 	})
 
 	t.Run("no match returns an error", func(t *testing.T) {
-		_, _, err := selectCacheEntry(twoEntries, "nope")
+		_, _, err := selectCacheEntry(twoEntries, "nope", cachePath)
 		if err == nil {
 			t.Fatal("expected an error")
 		}
 	})
+
+	// A serial matching several remembered ports is what a device moved
+	// between sockets leaves behind. Reporting the identity lookup's "no
+	// device matching location <serial>" instead hides both the real
+	// problem and its fix.
+	t.Run("a serial matching several ports reports the ambiguity, not a miss", func(t *testing.T) {
+		_, _, err := selectCacheEntry(twoEntries, "20120501030900000", cachePath)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		for _, want := range []string{"20120501030900000.1.1.3", "20120501030900000.1.1.4", cachePath} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should mention %q: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "matching location") {
+			t.Errorf("error should not be the identity lookup's location miss: %v", err)
+		}
+	})
+}
+
+func TestRevivePortPath(t *testing.T) {
+	cases := []struct {
+		selector string
+		wantOK   bool
+	}{
+		{"1-1.1.3", true},
+		{"2-4", true},
+		// All digits: parses as a bus number with no port path, which names
+		// no port to power-cycle. Must go to the cache instead.
+		{"20120501030900000", false},
+		{"20120501030900000.1.1.3", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		t.Run(c.selector, func(t *testing.T) {
+			if _, _, ok := revivePortPath(c.selector); ok != c.wantOK {
+				t.Errorf("revivePortPath(%q) ok = %v, want %v", c.selector, ok, c.wantOK)
+			}
+		})
+	}
 }
 
 // writeFakeHubCache saves a cache file containing entries at a temp path

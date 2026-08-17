@@ -54,15 +54,30 @@ one is found.
 
 ### `sdwire list`
 
-List every attached SDWire device: its identity, USB product info, and the
-reader's resolved block device path (or `None` if it can't currently be
-found — e.g. the device is switched to target mode).
+List every SDWire this computer knows about: its identity, USB product
+info, the reader's resolved block device path (or `None` if it can't
+currently be found), and which side its card is switched to.
 
 ```
 $ sdwire list
-Serial                        Product Info		Block Dev
-20120501030900000.1.1.3       [0bda::0316]		/dev/disk4
+Serial                        Product Info		Block Dev		State
+20120501030900000.1.1.3       [0bda::0316]		/dev/disk4		Host
 ```
+
+Devices remembered in the [hub-port cache](#sdwire3-state-semantics) are
+listed even when they aren't on the USB bus, since an SDWire3 in target
+mode is powered off and cannot be enumerated at all. For those, `State` is
+read from the hub port without powering anything on:
+
+| State | Meaning |
+| --- | --- |
+| `Host` | The card is connected to this computer. |
+| `Target` | The port is unpowered: the card is with the target board. |
+| `Unknown` | The port is powered but nothing is enumerated on it — an empty socket, or a reader that has crashed and been dropped from the bus. Recover the latter with [`sdwire revive`](#sdwire-revive). |
+
+The first three columns keep the Python CLI's exact widths and separators,
+so anything parsing that output by position still works; `--json` carries
+the same information plus an `attached` flag.
 
 ### `sdwire state`
 
@@ -90,6 +105,28 @@ mean disconnected from both sides. Prints nothing and exits `0` on success.
 sdwire switch host              # connect the card to this computer
 sdwire switch target -s bench   # connect the card to the "bench" device's target
 ```
+
+### `sdwire revive`
+
+Power-cycle the selected device's upstream hub port and wait for it to come
+back: the software equivalent of unplugging the device and plugging it back
+in. Any volumes mounted from its reader are unmounted first.
+
+```bash
+sdwire revive                 # the default (or -s named) device
+sdwire revive -s 1-1.1.3      # by location, straight from live USB topology
+```
+
+Use it when a reader has stopped answering and been dropped from the bus —
+`sdwire list` shows `Unknown`, or nothing at all. A USB port reset does not
+clear that state; only removing power does, and the port is held dark long
+enough for the reader's own supply to drain rather than merely reset.
+
+Because such a device isn't enumerated, it can't be selected by serial
+alone. `-s`/`--serial` accepts a **location** (`1-1.1.3`, as shown by
+`sdwire list`), which is resolved from the live USB topology — the hub is
+still there even when the device on it isn't — so a revive works even when
+the hub-port cache is empty, stale, or names one serial at several ports.
 
 ### `sdwire flash <image>`
 
@@ -150,6 +187,8 @@ $ sdwire list --json
     "location": "1-1.1.3",
     "product": "USB3.0-CRW",
     "generation": "SDWire3",
+    "state": "Host",
+    "attached": true,
     "block_dev": "/dev/disk4"
   }
 ]
@@ -238,11 +277,14 @@ lists the registered types in its error.
 
 ## Migrating from the Python CLI
 
-`sdwire list`, `sdwire state`, and `sdwire switch` match the
+`sdwire state` and `sdwire switch` match the
 [Python `sdwire-cli`](https://github.com/Badger-Embedded/sdwire-cli) v0.3.1's
-output byte-for-byte, so scripts built against it should work unchanged
-once this binary is what `sdwire` on your `PATH` resolves to. `flash`,
-`power`, `disk`, `--json`, and `--debug` are new.
+output byte-for-byte, and `sdwire list` keeps its first three columns at
+the same widths and separators — with a `State` column appended, and rows
+for devices remembered but not currently on the bus. Scripts reading those
+three columns by position work unchanged once this binary is what `sdwire`
+on your `PATH` resolves to. `flash`, `power`, `disk`, `revive`, `--json`,
+and `--debug` are new.
 
 **PATH precedence.** If you already have the Python CLI installed (e.g. via
 `pip`), check which one `PATH` finds first:
@@ -361,7 +403,12 @@ configured `PowerFunc` directly, independent of flashing;
 `WithoutRevive()` disables the hub-cache power-on fallback for callers that
 must not risk switching a target-mode SDWire3 back to host mode;
 `CachedPortState` reads an SDWire3's mode from the on-disk hub cache
-without powering anything on or off at all, for exactly that case.
+without powering anything on or off at all, for exactly that case;
+`ListDeviceStates()` is the same idea for the whole inventory, returning
+every attached device plus every remembered-but-absent one with the mode
+each is in; and `Revive` power-cycles a device's hub port to recover a
+reader that has been dropped from the bus, addressable by location when no
+other selector can reach it.
 
 ## Supported operating systems
 
@@ -381,7 +428,31 @@ check the udev rules above; on Windows, check libusb/UsbDk binding.
 [SDWire3 state semantics](#sdwire3-state-semantics). `sdwire switch
 host`/`ts` and `sdwire flash` (and, in the SDK, `New`/`NewWithSerial`/
 `NewWithIdentity` by default) revive it via the on-disk hub-port cache,
-powering it back on into host mode; `state` and `power` never do.
+powering it back on into host mode; `state`, `list` and `power` never do.
+[`sdwire revive`](#sdwire-revive) forces the same thing explicitly, for a
+device too broken to be selected the usual way.
+
+**The reader vanishes mid-flash and only comes back on a physical replug.**
+The SD reader inside an SDWire3 can stop answering under sustained writes.
+The OS asks its hub for a port reset, the reset fails to bring the port
+back up, and the device is torn off the bus — after which nothing
+re-probes that port, so `sdwire list` reports it as `Unknown` (or, if the
+port was powered down too, `Target`). On macOS the sequence appears in
+`log show` as:
+
+```
+USB3.0-CRW@01113000 endpoint 0x01: status 0xe0005000 (pipe stalled): 65536 bytes transferred
+USB3.0-CRW@01113000 endpoint 0x01: status 0xe00002ed (transaction error): 0 bytes transferred
+IOUSBMassStorageDriver: USB device 0BDA031601113000 - will be reset!
+AppleUSB20HubPort::resetAndCreateDevice: reset did not enable port
+AppleUSBHostPort::terminateDevice: destroying 0x0bda/0316/0204 (USB3.0-CRW): reset API call
+```
+
+Endpoint `0x01` is the reader's bulk-OUT pipe, so this is the reader
+crashing mid-write — not a fault in this tool, and not something a port
+reset clears. Use [`sdwire revive`](#sdwire-revive) instead of reaching for
+the cable; `sdwire revive -s <location>` works even when the device can no
+longer be selected by serial.
 
 **"device is attached to a root hub port" / a `hubpower.ErrRootPort`-shaped
 error.** SDWire3 switching works by cutting power to the device's

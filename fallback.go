@@ -3,6 +3,7 @@ package sdwire
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -158,6 +159,164 @@ func tryCacheFallback(ctx *gousb.Context, o *options, matches func(key string, r
 	return nil, DeviceInfo{}, lastErr
 }
 
+// cachedDeviceStates reports the state of every hub-port cache entry whose
+// port is not currently producing an enumerated SDWire (those are already
+// covered by USB enumeration, and are passed in by location via attached).
+// Ports are read with a status request only; nothing is powered on or off.
+//
+// An entry is skipped when its hub can't be opened — the topology has
+// changed under it, so it says nothing useful about a device — or when its
+// port has something connected, which by elimination is not an SDWire.
+func cachedDeviceStates(ctx *gousb.Context, o *options, attached map[string]bool) ([]DeviceState, error) {
+	cachePath, err := resolveHubCachePath(o)
+	if err != nil {
+		return nil, err
+	}
+	cache, err := hubpower.LoadCache(cachePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var states []DeviceState
+	for key, ref := range cache.All() {
+		info := cacheEntryDeviceInfo(key, ref)
+		if attached[info.Location()] {
+			continue
+		}
+
+		st, err := readPortStatus(ctx, ref)
+		if err != nil || st.Connected {
+			continue
+		}
+		states = append(states, DeviceState{Info: info, Mode: statusToMode(st)})
+	}
+
+	// Cache iteration order is random; callers (and their golden output)
+	// need a stable one.
+	slices.SortFunc(states, func(a, b DeviceState) int {
+		return strings.Compare(a.Info.Identity(), b.Info.Identity())
+	})
+	return states, nil
+}
+
+func readPortStatus(ctx *gousb.Context, ref *hubpower.PortRef) (hubpower.PortStatus, error) {
+	port, err := hubpower.Open(ctx, ref)
+	if err != nil {
+		return hubpower.PortStatus{}, err
+	}
+	defer port.Close()
+	return port.Status()
+}
+
+// Revive power-cycles the hub port an SDWire3 is (or was) attached to and
+// waits for it to re-enumerate: the software equivalent of unplugging the
+// device and plugging it back in.
+//
+// It exists for a reader that has stopped answering and been torn off the
+// bus by the OS — a state a USB port reset does not clear, and which leaves
+// the device invisible to ListDevices, so no ordinary selector can reach
+// it. The port is held dark for readerRevivePause rather than merely reset,
+// since a crashed reader can latch up through a shorter interruption.
+//
+// selector may be:
+//   - a location ("1-1.1.3"), resolved from live USB topology — the hub is
+//     still there even when the device on it isn't, so this works with no
+//     cache entry at all, or an ambiguous one;
+//   - a serial or port-suffixed identity, matched against the hub-port cache;
+//   - "", which requires the cache to hold exactly one entry.
+//
+// The revived device's info is returned, and its hub port re-cached under
+// the identity it enumerated with.
+func Revive(selector string, opts ...Option) (DeviceInfo, error) {
+	o := defaultOptions()
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	ctx := gousb.NewContext()
+	defer ctx.Close()
+
+	ref, err := revivePortRef(ctx, o, selector)
+	if err != nil {
+		return DeviceInfo{}, err
+	}
+
+	port, err := hubpower.Open(ctx, ref)
+	if err != nil {
+		return DeviceInfo{}, err
+	}
+	defer port.Close()
+
+	devPath := append(append([]int(nil), ref.HubPath...), ref.Port)
+	if err := unmountBeforeRevive(ref.Bus, devPath); err != nil {
+		return DeviceInfo{}, err
+	}
+
+	if err := revivePortPower(port); err != nil {
+		return DeviceInfo{}, err
+	}
+
+	dev, err := waitForSDWireViaPort(ctx, port, ref.Bus, devPath, o.hostWaitTimeout)
+	if err != nil {
+		return DeviceInfo{}, fmt.Errorf("reviving the device on %s: %w", formatLocation(ref.Bus, devPath), err)
+	}
+	defer dev.Close()
+
+	info := *describeDevice(dev)
+	if err := cachePortRef(o, info.Identity(), ref); err != nil {
+		o.warnFunc(fmt.Sprintf("caching hub port for %s: %v", info.Identity(), err))
+	}
+	return info, nil
+}
+
+// unmountBeforeRevive unmounts any volumes mounted from the reader at
+// (bus, devPath) before its power is cut, on the same terms as
+// SetMode(ModeTarget): a reader that can't be found has nothing mounted to
+// lose and the revive proceeds, but a failed unmount aborts rather than
+// yanking a mounted filesystem away. The usual case — a device wedged off
+// the bus — has no block device to find.
+func unmountBeforeRevive(bus int, devPath []int) error {
+	ref := blockdevRef(DeviceInfo{Generation: GenerationSDWire3, Bus: bus, PortPath: devPath})
+	path, err := blockdevFind(ref)
+	if err != nil {
+		return nil
+	}
+	if err := blockdevUnmount(path); err != nil {
+		return fmt.Errorf("unmounting %s before cutting power to its hub port: %w", path, err)
+	}
+	return nil
+}
+
+// revivePortPath reports the bus and device port path a Revive selector
+// names, when it is a location form ("1-1.1.3"). A bare Realtek serial is
+// all digits, so it parses as a location with no port path — and only a
+// path names a port to power-cycle, so those go to the cache instead.
+func revivePortPath(selector string) (bus int, path []int, ok bool) {
+	bus, path, ok = parseLocation(selector)
+	return bus, path, ok && len(path) > 0
+}
+
+// revivePortRef resolves a Revive selector to the hub port to power-cycle.
+// A location goes to live USB topology rather than the cache, which is what
+// lets a revive work when the cache is empty, stale, or ambiguous — the
+// cases a wedged device is most likely to leave behind.
+func revivePortRef(ctx *gousb.Context, o *options, selector string) (*hubpower.PortRef, error) {
+	if bus, path, ok := revivePortPath(selector); ok {
+		return hubpower.ResolveParent(ctx, bus, path)
+	}
+
+	cachePath, err := resolveHubCachePath(o)
+	if err != nil {
+		return nil, err
+	}
+	cache, err := hubpower.LoadCache(cachePath)
+	if err != nil {
+		return nil, err
+	}
+	_, ref, err := selectCacheEntry(cache.All(), selector, cachePath)
+	return ref, err
+}
+
 // statusToMode maps a hub port's live power/connection status to the
 // SwitchMode it implies for an SDWire3: an unpowered port means the reader
 // is off the bus entirely and the mux has handed the SD card to the
@@ -180,9 +339,15 @@ func statusToMode(st hubpower.PortStatus) SwitchMode {
 // "" requires exactly one entry (returning an error listing every cached
 // identity otherwise); a non-empty selector is matched using the same
 // rules as NewWithIdentity (suffixed identity or location form) and, if
-// that doesn't match, NewWithSerial (bare serial) — whichever succeeds is
-// used, and if both fail the identity-match error is returned.
-func selectCacheEntry(entries map[string]*hubpower.PortRef, selector string) (string, *hubpower.PortRef, error) {
+// that doesn't match, NewWithSerial (bare serial).
+//
+// When the serial matches several entries, that ambiguity is reported in
+// preference to the identity lookup's "not found": a serial with several
+// remembered ports is the real problem, and — since every SDWire3 ships
+// with the same hardcoded Realtek serial — it names either one device that
+// has been moved between sockets or two devices that genuinely share a
+// serial. Neither is visible in "no SDWire device matching location ...".
+func selectCacheEntry(entries map[string]*hubpower.PortRef, selector, cachePath string) (string, *hubpower.PortRef, error) {
 	keys := make([]string, 0, len(entries))
 	infos := make([]DeviceInfo, 0, len(entries))
 	for key, ref := range entries {
@@ -203,8 +368,13 @@ func selectCacheEntry(entries map[string]*hubpower.PortRef, selector string) (st
 
 	idx, err := selectByIdentity(infos, selector)
 	if err != nil {
-		if idx2, err2 := selectBySerial(infos, selector); err2 == nil {
+		idx2, serialErr := selectBySerial(infos, selector)
+		switch {
+		case serialErr == nil:
 			idx, err = idx2, nil
+		case !errors.Is(serialErr, ErrNoDeviceFound):
+			err = fmt.Errorf("%w. These are remembered hub ports, not devices seen now: "+
+				"pick one, or delete %s to forget them all", serialErr, cachePath)
 		}
 	}
 	if err != nil {
@@ -250,7 +420,7 @@ func CachedPortState(selector string, opts ...Option) (SwitchMode, string, error
 		return ModeUnknown, "", errors.New("hub-port cache is empty; no SDWire device has been seen yet")
 	}
 
-	key, ref, err := selectCacheEntry(entries, selector)
+	key, ref, err := selectCacheEntry(entries, selector, cachePath)
 	if err != nil {
 		return ModeUnknown, "", err
 	}

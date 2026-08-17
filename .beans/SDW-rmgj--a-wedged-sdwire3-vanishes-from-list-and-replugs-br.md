@@ -1,11 +1,11 @@
 ---
 # SDW-rmgj
 title: A wedged SDWire3 vanishes from list, and replugs break the software recovery
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-08-17T02:52:02Z
-updated_at: 2026-08-17T02:52:02Z
+updated_at: 2026-08-17T03:08:13Z
 ---
 
 When the SDWire3's reader wedges, `sdwire list` prints an empty table and
@@ -117,7 +117,64 @@ a location and power-cycles it — no unique cache hit required — would turn
 
 ## Todo
 
-- [ ] `list`: include cached-but-not-enumerated devices, with port state
-- [ ] Report cache-serial ambiguity honestly instead of the identity error
-- [ ] `sdwire revive` command, working from a location without a unique cache hit
-- [ ] README troubleshooting entry for the reader-wedge log signature
+- [x] `list`: include cached-but-not-enumerated devices, with port state
+- [x] Report cache-serial ambiguity honestly instead of the identity error
+- [x] `sdwire revive` command, working from a location without a unique cache hit
+- [x] README troubleshooting entry for the reader-wedge log signature
+
+## Summary of Changes
+
+All four, verified against the bench hardware — including on a reader that
+wedged for real, unprompted, part-way through the work.
+
+**1. `list` reports what it knows, not just what enumerates.** New SDK
+`ListDeviceStates`, which pairs USB enumeration with a read of every
+hub-port cache entry that isn't currently producing a device. It never
+powers a port on or off, so asking cannot move a card. An attached SDWire3
+is in host mode by construction (target mode *is* being off the bus);
+under `WithLegacySDWire3Switching`, whose mechanism leaves the device
+enumerated either way, it honestly reports Unknown; an SDWireC is asked
+directly over FTDI. Cache entries whose port has something connected are
+skipped — by elimination that isn't an SDWire — as are entries whose hub
+can no longer be opened.
+
+`list` gains a `State` column, *appended* after the existing three so the
+Python CLI's column positions still parse, and `--json` gains `state` and
+`attached`. `Target` means the port is unpowered; `Unknown` means powered
+with nothing on it, which is the wedge.
+
+**2. A serial matching several cached ports says so.** `selectCacheEntry`
+kept the identity lookup's "no SDWire device matching location <serial>"
+even when the serial lookup had found the real problem. It now prefers the
+ambiguity — which names each remembered port and the cache file to delete
+— and falls back to the identity error only for a genuine miss. The
+identity error is still right for a true not-found, so both paths keep
+their best message.
+
+**3. `sdwire revive`.** Cuts the port, holds it dark for
+`readerRevivePause`, restores it, waits for re-enumeration, and re-caches
+the port under whatever identity comes back. A location selector resolves
+through live USB topology rather than the cache, which is what makes it
+usable when the cache is empty, stale or ambiguous — the state a wedged
+device tends to leave behind. Volumes mounted from the reader are
+unmounted first, on the same terms as `SetMode(ModeTarget)`: nothing found
+means nothing to lose and it proceeds, but a *failed* unmount aborts
+rather than yanking a mounted filesystem.
+
+**4. README.** The wedge's macOS log signature is written out verbatim
+under troubleshooting so the lines are searchable, plus `revive`'s own
+section, the `State` column semantics as a table, and an honest correction
+to the migration section's "byte-for-byte" claim.
+
+**Bench verification.** The reader wedged on its own at 03:55 with the
+documented signature. `sdwire revive` recovered it in 6.5s from the config's
+default device, and `sdwire revive -s 1-1.1.3` again by location in 15.6s
+(unmounting `hello-boot` and `hello-data` first). `list` showed `Target`
+while it was down and `Host` + `/dev/disk4` after — the empty table this
+bean is about never appeared.
+
+Not done: `list` run immediately after a revive can abort inside libusb's
+darwin backend (`process_new_device` assertion, `cached_device->address <=
+UINT8_MAX`) when it enumerates while the device is still coming up. It's an
+upstream assert, so it kills the process rather than returning an error;
+re-running works. Filed separately as SDW-q3z3.
