@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestFormatFlashProgress(t *testing.T) {
 	const mib = 1024 * 1024
@@ -17,5 +20,16 @@ func TestFormatFlashProgress(t *testing.T) {
 		if got := formatFlashProgress(c.written, c.total); got != c.want {
 			t.Errorf("formatFlashProgress(%d, %d) = %q, want %q", c.written, c.total, got, c.want)
 		}
+	}
+}
+
+func TestFormatWriteRate(t *testing.T) {
+	if got := formatWriteRate(4*1024*1024, 2*time.Second); got != "2.0 MiB/s" {
+		t.Errorf("formatWriteRate = %q, want 2.0 MiB/s", got)
+	}
+	// A chunk timed at zero (a stubbed clock, or a device fast enough to
+	// round to nothing) must not divide by zero.
+	if got := formatWriteRate(1024, 0); got != "instant" {
+		t.Errorf("formatWriteRate(_, 0) = %q", got)
 	}
 }

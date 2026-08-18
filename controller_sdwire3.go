@@ -146,6 +146,42 @@ func (c *sdwire3Controller) SetMode(mode SwitchMode) error {
 	}
 }
 
+// Revive power-cycles the SDWire3's hub port and waits for the reader to
+// re-enumerate, without changing which side the card is switched to: this
+// is host mode either way, since a powered SDWire3 is on the host.
+//
+// It exists for a reader that has stopped answering mid-transfer and been
+// torn off the bus by the OS. SetMode(ModeHost) would eventually recover
+// such a device too, but only after waiting out hostWaitTimeout on an
+// already-powered port first; this goes straight to the power cycle, which
+// is the only thing that clears a latched-up reader.
+func (c *sdwire3Controller) Revive() error {
+	if c.resolveErr != nil {
+		return fmt.Errorf("cannot revive: %w", c.resolveErr)
+	}
+
+	if c.device != nil {
+		// Best-effort: the handle is usually already dead, which is why we
+		// are here, and its close error says nothing useful about the
+		// power cycle that follows.
+		c.device.Close()
+		c.device = nil
+	}
+
+	if err := revivePortPower(c.port); err != nil {
+		return err
+	}
+
+	ref := c.port.Ref()
+	devPath := append(append([]int(nil), ref.HubPath...), ref.Port)
+	dev, err := waitForSDWireViaPort(c.ctx, c.port, ref.Bus, devPath, c.hostWaitTimeout)
+	if err != nil {
+		return err
+	}
+	c.device = dev
+	return nil
+}
+
 // Mode reads the SDWire3's live state from its hub port: unpowered means
 // ModeTarget; powered and enumerated means ModeHost; powered but not yet
 // enumerated (e.g. mid re-enumeration) is reported as ModeUnknown with a

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jphastings/sdwire"
 	"github.com/spf13/cobra"
@@ -20,6 +21,17 @@ func formatFlashProgress(written, total int64) string {
 		pct = int(written * 100 / total)
 	}
 	return fmt.Sprintf("\rflashed %d / %d MiB (%d%%)", written/mib, total/mib, pct)
+}
+
+// formatWriteRate renders a chunk's throughput, the number to watch when
+// deciding whether a reader is struggling: a healthy one holds steady,
+// while one whose internal buffer is backing up slows chunk by chunk
+// before it stalls outright.
+func formatWriteRate(size int, took time.Duration) string {
+	if took <= 0 {
+		return "instant"
+	}
+	return fmt.Sprintf("%.1f MiB/s", float64(size)/(1024*1024)/took.Seconds())
 }
 
 func newFlashCmd(flags *globalFlags) *cobra.Command {
@@ -70,12 +82,23 @@ func newFlashCmd(flags *globalFlags) *cobra.Command {
 			defer cancel()
 
 			stderr := cmd.ErrOrStderr()
-			err = res.sw.FlashAndBoot(ctx, imagePath,
+			flashOpts := []sdwire.FlashOption{
 				sdwire.WithFlashMinDarkTime(cfg.MinOffDuration()),
 				sdwire.WithFlashProgress(func(written, total int64) {
 					fmt.Fprint(stderr, formatFlashProgress(written, total))
 				}),
-			)
+			}
+			if flags.debug {
+				flashOpts = append(flashOpts, sdwire.WithWriteTiming(func(offset int64, size int, took time.Duration) {
+					// The progress line is redrawn with \r and has no
+					// newline of its own; finish it before writing over it.
+					fmt.Fprintln(stderr)
+					debugf(cmd, flags, "wrote %d KiB at offset %d MiB in %s (%s)",
+						size/1024, offset/(1024*1024), took.Round(time.Millisecond), formatWriteRate(size, took))
+				}))
+			}
+
+			err = res.sw.FlashAndBoot(ctx, imagePath, flashOpts...)
 			fmt.Fprintln(stderr)
 			if err != nil {
 				return opErrf("flashing %s: %w", imagePath, err)

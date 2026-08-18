@@ -145,6 +145,23 @@ sudo sdwire flash ./ubuntu-24.04-preinstalled.img.xz -s bench
 flashed 1234 / 3800 MiB (32%)
 ```
 
+If the reader stops responding part-way through the write — see
+[the reader-wedge entry](#troubleshooting) below — the flash does not fail.
+Its hub port is power-cycled, the reader is waited for at the same USB
+location, and the write resumes from the last completed chunk, up to three
+times:
+
+```
+flashed 96 / 272 MiB (35%)
+warning: the reader stopped responding 96 MiB into the write; power-cycling its hub port and resuming (attempt 1 of 3)
+flashed 272 / 272 MiB (100%)
+```
+
+The warning is deliberately loud: a flash that needed several power cycles
+should never look like a clean one. Errors that a power cycle cannot fix —
+a full card, an unreadable image — still fail immediately rather than
+retrying. `WithWriteRetries` in the SDK tunes or disables the recovery.
+
 Without a power plugin configured for the device the flash still happens,
 but nothing power-cycles the target afterwards: it carries on running
 whatever it was before, which is indistinguishable from a board that won't
@@ -207,6 +224,18 @@ switches port power in a ganged fashion, affecting sibling ports) always
 print to stderr, whether or not `--debug` is set. `--debug` adds further
 diagnostics — the resolved config path, which device a selector matched,
 and so on.
+
+During a flash, `--debug` also prints how long each chunk's write took and
+its throughput:
+
+```
+debug: wrote 4096 KiB at offset 84 MiB in 121ms (33.1 MiB/s)
+```
+
+That is the number to watch when a reader is misbehaving: a healthy one
+holds a steady rate, while one whose internal write buffer is backing up
+slows chunk by chunk before it stalls outright. `WithWriteTiming` exposes
+the same data to SDK callers.
 
 ### Shell completion
 
@@ -404,7 +433,9 @@ configured `PowerFunc` directly, independent of flashing;
 must not risk switching a target-mode SDWire3 back to host mode;
 `CachedPortState` reads an SDWire3's mode from the on-disk hub cache
 without powering anything on or off at all, for exactly that case;
-`ListDeviceStates()` is the same idea for the whole inventory, returning
+`WithWriteRetries` and `WithWriteTiming` tune a flash's recovery from a
+reader that drops off the bus mid-write, and expose its per-chunk write
+timings; `ListDeviceStates()` is the same idea for the whole inventory, returning
 every attached device plus every remembered-but-absent one with the mode
 each is in; and `Revive` power-cycles a device's hub port to recover a
 reader that has been dropped from the bus, addressable by location when no
@@ -450,9 +481,20 @@ AppleUSBHostPort::terminateDevice: destroying 0x0bda/0316/0204 (USB3.0-CRW): res
 
 Endpoint `0x01` is the reader's bulk-OUT pipe, so this is the reader
 crashing mid-write — not a fault in this tool, and not something a port
-reset clears. Use [`sdwire revive`](#sdwire-revive) instead of reaching for
-the cable; `sdwire revive -s <location>` works even when the device can no
-longer be selected by serial.
+reset clears. Nothing in software can stop the reader stalling; what
+software can do is not lose the work.
+
+[`sdwire flash`](#sdwire-flash-image) recovers from this automatically,
+power-cycling the port and resuming where it stopped. Outside a flash, use
+[`sdwire revive`](#sdwire-revive) instead of reaching for the cable;
+`sdwire revive -s <location>` works even when the device can no longer be
+selected by serial.
+
+Two things make it worse and are worth ruling out: a reader on a USB 2.0
+port writes at a tenth of the speed and so spends ten times as long in the
+window where it can fail, and other software grabbing the card (Spotlight
+indexing a freshly mounted volume, or anything enumerating USB) adds load
+at exactly the wrong moment.
 
 **"device is attached to a root hub port" / a `hubpower.ErrRootPort`-shaped
 error.** SDWire3 switching works by cutting power to the device's

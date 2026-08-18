@@ -84,6 +84,16 @@ type DeviceController interface {
 	Close() error
 }
 
+// deviceReviver is implemented by controllers that can power-cycle their
+// device to recover a reader that has stopped answering — currently only
+// SDWire3, which is the generation with hub-port power control. It is a
+// separate optional interface rather than part of DeviceController so that
+// controllers with no such mechanism simply don't offer one, and callers
+// can tell the difference.
+type deviceReviver interface {
+	Revive() error
+}
+
 // SDWire represents a connected SDWire device that can switch an SD card
 // between a target device and host computer.
 type SDWire struct {
@@ -91,6 +101,7 @@ type SDWire struct {
 	info       DeviceInfo
 	controller DeviceController
 	powerFunc  PowerFunc
+	warn       func(string)
 }
 
 // DeviceInfo contains identifying information about an SDWire device.
@@ -346,6 +357,7 @@ func finishConnect(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo, o *op
 		info:       info,
 		controller: controller,
 		powerFunc:  o.powerFunc,
+		warn:       o.warnFunc,
 	}, nil
 }
 
@@ -439,6 +451,16 @@ func (s *SDWire) GetManufacturer() string {
 // the fully-resolved identity of the device they ended up with.
 func (s *SDWire) Info() DeviceInfo {
 	return s.info
+}
+
+// warnf routes a warning to the handler this SDWire was constructed with,
+// if any. An SDWire built without WithWarningHandler (or constructed
+// directly in a test) silently drops them.
+func (s *SDWire) warnf(format string, args ...any) {
+	if s.warn == nil {
+		return
+	}
+	s.warn(fmt.Sprintf(format, args...))
 }
 
 // String returns a formatted string with device information.
