@@ -1,11 +1,11 @@
 ---
 # SDW-ziqh
 title: An off-bus SDWire3 still reads as absent when its serial has several remembered ports
-status: in-progress
+status: completed
 type: bug
 priority: high
 created_at: 2026-09-02T04:53:33Z
-updated_at: 2026-09-02T04:59:50Z
+updated_at: 2026-09-02T07:20:04Z
 ---
 
 Second bench report of the SDW-rmgj family, 2026-09-02 (raw write-up kept
@@ -62,7 +62,7 @@ hub port being unpowered, which is how SDWire3 target mode is implemented.
 - [x] `list` warns, once, when remembered ports are skipped because their hub can't be opened
 - [x] Bench skill: off-bus after flash is normal; `list` State column; `switch host`/`revive` recover; `power` never touches the mux; never a Mac root port
 - [x] README: most-recently-seen rule
-- [ ] Tag a release so `go install …@latest` carries the fix
+- [x] Tag a release so `go install …@latest` carries the fix (v0.3.0)
 
 
 ## Summary of Changes
@@ -119,3 +119,30 @@ noticing an off-bus mux (item 3), `power state` (item 5) and a `doctor`
 command (item 6) are unbuilt; the skill fix covers the operator-side
 confusion behind item 3. `list` warns about unreachable entries rather
 than listing them as rows (item 4).
+
+
+## Bench verification (v0.3.0, 2026-09-02 08:17–08:20)
+
+Mux back on TS4 socket 1.1.4. The dock was still on the other Mac port,
+so the live location was `0-1.1.4` while all four cache entries said bus 1:
+`list` warned "4 remembered hub port(s) skipped" and showed only the live
+row. Moving the dock's Thunderbolt cable also resets the hub, so every
+port came back powered and the report's dark-port experiment on 1.1.4
+could not be reproduced as-is.
+
+| Step | Result | Time |
+| --- | --- | --- |
+| `state` (live) | `Host`; re-cached `.1.1.4` as bus 0 with a `last_seen` stamp; legacy entries now serialise as zero time | — |
+| `switch dut` | port off | 0.9s |
+| `list` | `.1.1.4 … None Target`, warning now for the 3 stale entries | 0.13s |
+| `state` (off bus, 4 same-serial entries) | `Target` via most-recent entry — the v0.2.0/HEAD error is gone | 0.13s |
+| `switch dut` again | "already in target mode; nothing to do" | 0.13s |
+| `switch host` | back at `0-1.1.4`, `/dev/disk4` | 7.7s |
+| `switch dut` → 6s → `revive` (config serial → cache → most recent) | `Revived 20120501030900000.1.1.4 at 0-1.1.4` | 5.0s |
+| `switch dut` → 6s → `revive -s 0-1.1.4` | same | 5.0s |
+
+Caveat on the `switch host` timing: the three older entries are on the
+wrong bus, so their hub opens fail instantly whatever the order; the
+most-recent-first ordering is pinned by unit test rather than by this run.
+Not run: repeated flashes on one port to look for PORT_POWER degradation
+(report item 3), and a flash at all — no target confirmed wired.
