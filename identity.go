@@ -133,6 +133,13 @@ func selectBySerial(candidates []DeviceInfo, query string) (int, error) {
 }
 
 func selectBySerialAndPath(candidates []DeviceInfo, serial string, path []int) (int, error) {
+	matches := matchesBySerialAndPath(candidates, serial, path)
+	return resolveMatch(candidates, matches, fmt.Sprintf("serial %q", serial))
+}
+
+// matchesBySerialAndPath returns the indices of candidates matching serial
+// and, if path is non-nil, path.
+func matchesBySerialAndPath(candidates []DeviceInfo, serial string, path []int) []int {
 	var matches []int
 	for i, c := range candidates {
 		if c.Serial != serial {
@@ -142,7 +149,7 @@ func selectBySerialAndPath(candidates []DeviceInfo, serial string, path []int) (
 			matches = append(matches, i)
 		}
 	}
-	return resolveMatch(candidates, matches, fmt.Sprintf("serial %q", serial))
+	return matches
 }
 
 // selectByIdentity resolves a NewWithIdentity query, which may be either the

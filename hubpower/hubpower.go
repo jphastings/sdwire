@@ -8,6 +8,7 @@ package hubpower
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/gousb"
 )
@@ -40,6 +41,11 @@ type PortRef struct {
 	// mis-controlling whatever is there now.
 	HubVendor  uint16 `json:"hub_vendor"`
 	HubProduct uint16 `json:"hub_product"`
+	// LastSeen is when a device was last enumerated at this port. A device
+	// moved between sockets over its life has one entry per socket; this is
+	// what tells the one it is at now from the ones it has since left. Zero
+	// for entries written before this field existed.
+	LastSeen time.Time `json:"last_seen"`
 }
 
 // parentPathAndPort splits a device's USB port path into its parent hub's

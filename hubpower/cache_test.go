@@ -3,8 +3,8 @@ package hubpower
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,8 +36,15 @@ func TestCacheSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCache: %v", err)
 	}
-	if got := loaded.Get("device-key"); got == nil || !reflect.DeepEqual(got, ref) {
-		t.Fatalf("Get(device-key) = %+v, want %+v", got, ref)
+	got := loaded.Get("device-key")
+	if got == nil {
+		t.Fatalf("Get(device-key) = nil, want an entry")
+	}
+	if got.Bus != ref.Bus || !slices.Equal(got.HubPath, ref.HubPath) || got.Port != ref.Port || got.HubVendor != ref.HubVendor || got.HubProduct != ref.HubProduct {
+		t.Errorf("Get(device-key) = %+v, want fields matching %+v", got, ref)
+	}
+	if got.LastSeen.IsZero() {
+		t.Error("LastSeen is zero, want it stamped by Put and to survive the Save/Load round trip")
 	}
 }
 
@@ -92,8 +99,15 @@ func TestCachePutOverwritesSameKey(t *testing.T) {
 	updated := &PortRef{Bus: 1, HubPath: []int{1, 1}, Port: 4}
 	c.Put("device-key", updated)
 
-	if got := c.Get("device-key"); got == nil || !reflect.DeepEqual(got, updated) {
-		t.Errorf("Get(device-key) = %+v, want %+v", got, updated)
+	got := c.Get("device-key")
+	if got == nil {
+		t.Fatalf("Get(device-key) = nil, want an entry")
+	}
+	if got.Bus != updated.Bus || !slices.Equal(got.HubPath, updated.HubPath) || got.Port != updated.Port {
+		t.Errorf("Get(device-key) = %+v, want fields matching %+v", got, updated)
+	}
+	if got.LastSeen.IsZero() {
+		t.Error("LastSeen is zero, want it stamped by the overwriting Put")
 	}
 }
 

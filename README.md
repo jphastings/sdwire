@@ -79,6 +79,11 @@ The first three columns keep the Python CLI's exact widths and separators,
 so anything parsing that output by position still works; `--json` carries
 the same information plus an `attached` flag.
 
+A remembered port whose status can't be read — the dock it belongs to has
+moved to a different USB port, say, which changes its bus number — is
+skipped, and `list` warns how many it skipped and which file to delete to
+forget them.
+
 ### `sdwire state`
 
 Print which side the selected device's SD card is currently connected to:
@@ -347,6 +352,16 @@ macOS, `~/.cache/sdwire/hubports.json` on Linux,
 device live rewrites its entry, so deleting the file is safe: the worst
 that happens is a device sitting in target mode can't be found again until
 it's powered back on some other way.
+
+A device moved between sockets over its life leaves one entry per socket,
+and nothing removes the old ones — every SDWire3 shares one Realtek serial,
+so a bare serial can name several remembered ports. Each entry records when
+the device was last seen there, and a device that isn't on the bus is taken
+to be at the port it was most recently seen at: `state`, `switch dut`'s
+already-in-target check and `revive` by serial answer for that one, and
+`switch host` powers it on first. Entries written before this was recorded
+have no sighting to compare, so they still report the ambiguity until the
+device is next seen live.
 
 ## Permissions
 

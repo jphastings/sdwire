@@ -122,11 +122,41 @@ func powerOnAndWait(ctx *gousb.Context, o *options, ref *hubpower.PortRef) (*gou
 	return waitForSDWireViaPort(ctx, port, ref.Bus, devPath, o.hostWaitTimeout)
 }
 
+type cacheEntry struct {
+	key string
+	ref *hubpower.PortRef
+}
+
+// entriesByRecency orders cache entries most recently seen first, ties by
+// key, so callers that must guess which remembered port a device is at
+// now try the one it was last seen at before sockets it has since left.
+func entriesByRecency(entries map[string]*hubpower.PortRef) []cacheEntry {
+	out := make([]cacheEntry, 0, len(entries))
+	for key, ref := range entries {
+		out = append(out, cacheEntry{key, ref})
+	}
+	slices.SortFunc(out, func(a, b cacheEntry) int {
+		switch {
+		case a.ref.LastSeen.After(b.ref.LastSeen):
+			return -1
+		case b.ref.LastSeen.After(a.ref.LastSeen):
+			return 1
+		default:
+			return strings.Compare(a.key, b.key)
+		}
+	})
+	return out
+}
+
 // tryCacheFallback consults the hubpower on-disk cache for a previously
 // seen (and possibly now powered-off) SDWire3 matching the given
 // selection, powers its hub port back on, and waits for it to reappear.
 // Cache entries whose hub is present but no longer matches the recorded
 // vendor/product (hubpower.ErrHubMismatch — a stale entry) are removed.
+//
+// Entries are tried most-recently-seen first, so a device that has moved
+// between sockets is found at its current one before its hub port is
+// power-cycled through every socket it has since left.
 func tryCacheFallback(ctx *gousb.Context, o *options, matches func(key string, ref *hubpower.PortRef) bool) (*gousb.Device, DeviceInfo, error) {
 	cachePath, err := resolveHubCachePath(o)
 	if err != nil {
@@ -138,7 +168,8 @@ func tryCacheFallback(ctx *gousb.Context, o *options, matches func(key string, r
 	}
 
 	lastErr := errors.New("no cached hub port produced a matching SDWire device")
-	for key, ref := range cache.All() {
+	for _, entry := range entriesByRecency(cache.All()) {
+		key, ref := entry.key, entry.ref
 		if !matches(key, ref) {
 			continue
 		}
@@ -178,6 +209,7 @@ func cachedDeviceStates(ctx *gousb.Context, o *options, attached map[string]bool
 	}
 
 	var states []DeviceState
+	var unreachable int
 	for key, ref := range cache.All() {
 		info := cacheEntryDeviceInfo(key, ref)
 		if attached[info.Location()] {
@@ -185,10 +217,18 @@ func cachedDeviceStates(ctx *gousb.Context, o *options, attached map[string]bool
 		}
 
 		st, err := readPortStatus(ctx, ref)
-		if err != nil || st.Connected {
+		if err != nil {
+			unreachable++
+			continue
+		}
+		if st.Connected {
 			continue
 		}
 		states = append(states, DeviceState{Info: info, Mode: statusToMode(st)})
+	}
+
+	if unreachable > 0 {
+		o.warnFunc(fmt.Sprintf("%d remembered hub port(s) skipped because their status couldn't be read (the hub may be on a different USB port, or the entry is stale). Delete %s to forget them", unreachable, cachePath))
 	}
 
 	// Cache iteration order is random; callers (and their golden output)
@@ -341,18 +381,19 @@ func statusToMode(st hubpower.PortStatus) SwitchMode {
 // rules as NewWithIdentity (suffixed identity or location form) and, if
 // that doesn't match, NewWithSerial (bare serial).
 //
-// When the serial matches several entries, that ambiguity is reported in
-// preference to the identity lookup's "not found": a serial with several
-// remembered ports is the real problem, and — since every SDWire3 ships
-// with the same hardcoded Realtek serial — it names either one device that
-// has been moved between sockets or two devices that genuinely share a
-// serial. Neither is visible in "no SDWire device matching location ...".
+// A serial seen at several ports resolves to the one it was most recently
+// seen at, since every SDWire3 ships with the same hardcoded Realtek
+// serial and a device moved between sockets leaves one entry per socket.
+// Only entries with no recorded sighting, or a tie, are still reported as
+// ambiguous — in preference to the identity lookup's "not found", which
+// hides both the real problem and its fix.
 func selectCacheEntry(entries map[string]*hubpower.PortRef, selector, cachePath string) (string, *hubpower.PortRef, error) {
-	keys := make([]string, 0, len(entries))
-	infos := make([]DeviceInfo, 0, len(entries))
-	for key, ref := range entries {
-		keys = append(keys, key)
-		infos = append(infos, cacheEntryDeviceInfo(key, ref))
+	ordered := entriesByRecency(entries)
+	keys := make([]string, len(ordered))
+	infos := make([]DeviceInfo, len(ordered))
+	for i, entry := range ordered {
+		keys[i] = entry.key
+		infos[i] = cacheEntryDeviceInfo(entry.key, entry.ref)
 	}
 
 	if selector == "" {
@@ -373,8 +414,22 @@ func selectCacheEntry(entries map[string]*hubpower.PortRef, selector, cachePath 
 		case serialErr == nil:
 			idx, err = idx2, nil
 		case !errors.Is(serialErr, ErrNoDeviceFound):
+			serial, path, _ := splitIdentity(selector)
+			m := matchesBySerialAndPath(infos, serial, path)
+			if len(m) > 1 && !entries[keys[m[0]]].LastSeen.IsZero() && entries[keys[m[0]]].LastSeen.After(entries[keys[m[1]]].LastSeen) {
+				idx, err = m[0], nil
+				break
+			}
 			err = fmt.Errorf("%w. These are remembered hub ports, not devices seen now: "+
 				"pick one, or delete %s to forget them all", serialErr, cachePath)
+		default:
+			// parseLocation accepts an all-digit bare serial as a bus
+			// number, so the identity lookup's error would misleadingly
+			// say "no SDWire device matching location <serial>". Only
+			// keep it for a genuinely location-shaped selector.
+			if _, _, ok := revivePortPath(selector); !ok {
+				err = serialErr
+			}
 		}
 	}
 	if err != nil {

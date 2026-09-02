@@ -1,10 +1,14 @@
 package sdwire
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/gousb"
 	"github.com/jphastings/sdwire/hubpower"
 )
 
@@ -179,6 +183,78 @@ func TestSelectCacheEntry(t *testing.T) {
 			t.Errorf("error should not be the identity lookup's location miss: %v", err)
 		}
 	})
+
+	t.Run("a serial matching several ports picks the one most recently seen", func(t *testing.T) {
+		now := time.Now()
+		entries := map[string]*hubpower.PortRef{
+			"20120501030900000.1.1.3": {Bus: 1, HubPath: []int{1, 1}, Port: 3, LastSeen: now.Add(-time.Hour)},
+			"20120501030900000.1.1.4": {Bus: 1, HubPath: []int{1, 1}, Port: 4, LastSeen: now},
+		}
+		key, _, err := selectCacheEntry(entries, "20120501030900000", cachePath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if key != "20120501030900000.1.1.4" {
+			t.Errorf("key = %q, want the most recently seen entry", key)
+		}
+	})
+
+	t.Run("a serial matching several ports prefers a recorded sighting over none", func(t *testing.T) {
+		now := time.Now()
+		zeroThenSeen := map[string]*hubpower.PortRef{
+			"20120501030900000.1.1.3": {Bus: 1, HubPath: []int{1, 1}, Port: 3},
+			"20120501030900000.1.1.4": {Bus: 1, HubPath: []int{1, 1}, Port: 4, LastSeen: now},
+		}
+		key, _, err := selectCacheEntry(zeroThenSeen, "20120501030900000", cachePath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if key != "20120501030900000.1.1.4" {
+			t.Errorf("key = %q, want the entry with a recorded sighting", key)
+		}
+
+		seenThenZero := map[string]*hubpower.PortRef{
+			"20120501030900000.1.1.3": {Bus: 1, HubPath: []int{1, 1}, Port: 3, LastSeen: now},
+			"20120501030900000.1.1.4": {Bus: 1, HubPath: []int{1, 1}, Port: 4},
+		}
+		key, _, err = selectCacheEntry(seenThenZero, "20120501030900000", cachePath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if key != "20120501030900000.1.1.3" {
+			t.Errorf("key = %q, want the entry with a recorded sighting", key)
+		}
+	})
+
+	t.Run("a serial matching several ports with equal last-seen stays ambiguous", func(t *testing.T) {
+		now := time.Now()
+		entries := map[string]*hubpower.PortRef{
+			"20120501030900000.1.1.3": {Bus: 1, HubPath: []int{1, 1}, Port: 3, LastSeen: now},
+			"20120501030900000.1.1.4": {Bus: 1, HubPath: []int{1, 1}, Port: 4, LastSeen: now},
+		}
+		_, _, err := selectCacheEntry(entries, "20120501030900000", cachePath)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		for _, want := range []string{"20120501030900000.1.1.3", "20120501030900000.1.1.4", cachePath} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should mention %q: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("a bare numeric serial that matches nothing names the serial, not a location", func(t *testing.T) {
+		_, _, err := selectCacheEntry(twoEntries, "999", cachePath)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), `serial "999"`) {
+			t.Errorf("error should name the serial: %v", err)
+		}
+		if strings.Contains(err.Error(), "location") {
+			t.Errorf("error should not be the location miss: %v", err)
+		}
+	})
 }
 
 func TestRevivePortPath(t *testing.T) {
@@ -203,23 +279,23 @@ func TestRevivePortPath(t *testing.T) {
 	}
 }
 
-// writeFakeHubCache saves a cache file containing entries at a temp path
-// and returns the path. The PortRefs never correspond to real hardware, so
-// any attempt to actually open one of them is expected to fail — that's
-// fine for exercising CachedPortState's cache-loading and selection logic
-// without touching real USB.
+// writeFakeHubCache saves a cache file containing entries at a temp path and
+// returns the path. It writes the map straight to JSON rather than going
+// through Cache.Put, which stamps LastSeen with time.Now() in
+// map-iteration order — tests need to control LastSeen explicitly. The
+// PortRefs never correspond to real hardware, so any attempt to actually
+// open one of them is expected to fail — that's fine for exercising
+// CachedPortState's cache-loading and selection logic without touching real
+// USB.
 func writeFakeHubCache(t *testing.T, entries map[string]*hubpower.PortRef) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "hubports.json")
-	cache, err := hubpower.LoadCache(path)
+	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
-		t.Fatalf("LoadCache: %v", err)
+		t.Fatalf("Marshal: %v", err)
 	}
-	for key, ref := range entries {
-		cache.Put(key, ref)
-	}
-	if err := cache.Save(path); err != nil {
-		t.Fatalf("Save: %v", err)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 	return path
 }
@@ -282,5 +358,120 @@ func TestCachedPortStateMatchedEntryAttemptsHubOpen(t *testing.T) {
 	}
 	if mode != ModeUnknown {
 		t.Errorf("mode = %v, want ModeUnknown on error", mode)
+	}
+}
+
+// TestCachedPortStatePrefersMostRecentlySeenPort mirrors
+// TestCachedPortStateMatchedEntryAttemptsHubOpen but with two cache entries
+// for the same serial: CachedPortState must resolve the ambiguity to the
+// more recently seen one rather than erroring.
+func TestCachedPortStatePrefersMostRecentlySeenPort(t *testing.T) {
+	now := time.Now()
+	path := writeFakeHubCache(t, map[string]*hubpower.PortRef{
+		"20120501030900000.1.1.3": {Bus: 250, HubPath: []int{1}, Port: 3, LastSeen: now.Add(-time.Hour)},
+		"20120501030900000.1.1.4": {Bus: 250, HubPath: []int{1}, Port: 4, LastSeen: now},
+	})
+
+	_, identity, err := CachedPortState("20120501030900000", WithHubCachePath(path))
+	if err == nil {
+		t.Fatal("expected a hub-open error against a non-existent hub")
+	}
+	if identity != "20120501030900000.1.1.4" {
+		t.Errorf("identity = %q, want the most recently seen entry", identity)
+	}
+}
+
+// TestTryCacheFallbackTriesMostRecentlySeenFirst proves tryCacheFallback
+// offers matching entries to the caller in recency order rather than
+// cache/map order, by recording the order matches is called with.
+func TestTryCacheFallbackTriesMostRecentlySeenFirst(t *testing.T) {
+	now := time.Now()
+	path := writeFakeHubCache(t, map[string]*hubpower.PortRef{
+		"20120501030900000.1.1.2": {Bus: 250, HubPath: []int{1}, Port: 2},
+		"20120501030900000.1.1.3": {Bus: 250, HubPath: []int{1}, Port: 3, LastSeen: now.Add(-time.Hour)},
+		"20120501030900000.1.1.4": {Bus: 250, HubPath: []int{1}, Port: 4, LastSeen: now},
+	})
+
+	ctx := gousb.NewContext()
+	defer ctx.Close()
+	o := defaultOptions()
+	o.hubCachePath = path
+
+	var tried []string
+	matches := func(key string, ref *hubpower.PortRef) bool {
+		tried = append(tried, key)
+		return true
+	}
+
+	_, _, err := tryCacheFallback(ctx, o, matches)
+	if err == nil {
+		t.Fatal("expected an error against non-existent hubs")
+	}
+
+	want := []string{
+		"20120501030900000.1.1.4",
+		"20120501030900000.1.1.3",
+		"20120501030900000.1.1.2",
+	}
+	if len(tried) != len(want) {
+		t.Fatalf("tried %v, want %v", tried, want)
+	}
+	for i, k := range want {
+		if tried[i] != k {
+			t.Errorf("tried[%d] = %q, want %q", i, tried[i], k)
+		}
+	}
+}
+
+// TestListDeviceStatesWarnsOnceForUnreachablePorts proves ListDeviceStates
+// warns once (not once per entry) when cached hub ports can't be read, and
+// omits those entries from the returned states rather than reporting them
+// with a guessed mode.
+func TestListDeviceStatesWarnsOnceForUnreachablePorts(t *testing.T) {
+	path := writeFakeHubCache(t, map[string]*hubpower.PortRef{
+		"20120501030900000.1.1.3": {Bus: 250, HubPath: []int{1}, Port: 3},
+		"20120501030900000.1.1.4": {Bus: 250, HubPath: []int{1}, Port: 4},
+	})
+
+	var warnings []string
+	states, err := ListDeviceStates(WithHubCachePath(path), WithWarningHandler(func(msg string) {
+		warnings = append(warnings, msg)
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "2 remembered hub port(s)") || !strings.Contains(warnings[0], path) {
+		t.Errorf("warning = %q, want it to mention the count and %q", warnings[0], path)
+	}
+	for _, st := range states {
+		if st.Info.Identity() == "20120501030900000.1.1.3" || st.Info.Identity() == "20120501030900000.1.1.4" {
+			t.Errorf("states should not include the unreachable fake entries, got %+v", st)
+		}
+	}
+}
+
+func TestEntriesByRecency(t *testing.T) {
+	now := time.Now()
+	entries := map[string]*hubpower.PortRef{
+		"newest": {LastSeen: now},
+		"older":  {LastSeen: now.Add(-time.Hour)},
+		"zero":   {},
+		"tie-b":  {LastSeen: now.Add(-2 * time.Hour)},
+		"tie-a":  {LastSeen: now.Add(-2 * time.Hour)},
+	}
+
+	got := entriesByRecency(entries)
+
+	want := []string{"newest", "older", "tie-a", "tie-b", "zero"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(got), len(want))
+	}
+	for i, k := range want {
+		if got[i].key != k {
+			t.Errorf("entry %d = %q, want %q", i, got[i].key, k)
+		}
 	}
 }

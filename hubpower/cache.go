@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Cache persists PortRef entries on disk, keyed by a caller-supplied device
@@ -112,7 +113,9 @@ func (c *Cache) Put(key string, ref *PortRef) {
 			delete(c.entries, k)
 		}
 	}
-	c.entries[key] = ref
+	stored := *ref
+	stored.LastSeen = time.Now()
+	c.entries[key] = &stored
 }
 
 // samePort reports whether a and b name the same downstream port of the

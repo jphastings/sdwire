@@ -12,8 +12,9 @@ smart plug for target-board power, both driven by the `sdwire` CLI
 never copy credentials out of it. With several muxes attached, add
 `-s <serial|location|config-name>` to every command.
 
-All commands are safe from any starting state. `sdwire state` is read-only
-and never disturbs the card — check it freely.
+All commands are safe from any starting state. `sdwire state` and `sdwire
+list` are read-only and never disturb the card — check them freely, and
+prefer `list`: it also shows a mux that is off the bus (see below).
 
 ## Flows
 
@@ -57,6 +58,31 @@ sdwire power off && sdwire switch host
   switching (see the project README); a root-port or ganged-hub setup
   produces a clear error/warning rather than working.
 - `--json` on list/state/disk for scripting.
+
+## When the mux "disappears"
+
+After `flash` or `switch dut` an SDWire3 is **off the USB bus by design**:
+target mode is implemented by cutting power to its hub port. An empty
+`sdwire list`, a `Target` row with no block device, or an old CLI's
+`state` "no SDWire device ... found" is the healthy post-flash state, not
+a fault. Read the `State` column of `sdwire list` before touching anything:
+
+| `list` shows | Meaning | Do |
+| --- | --- | --- |
+| `Host` + `/dev/diskN` | On the bus, card on this machine | Carry on |
+| `Target` | Port unpowered; card is with the target | `sdwire switch host` brings it back |
+| `Unknown` | Port powered, nothing enumerated: empty socket, or a reader that crashed off the bus | `sdwire revive -s <location>` |
+
+- `power on|off|cycle` drive the mains plug only and never touch the mux:
+  they succeed while it is off the bus and cannot bring it back.
+- A hub port switched off stays off across replugs and reboots. A mux
+  plugged into such a port does not enumerate until something re-powers
+  it; `switch host` does, a different socket merely sidesteps it.
+- Never plug an SDWire3 straight into the computer's own port: a root port
+  cannot be power-switched, so it enumerates but can never hand the card
+  to the target.
+- Only reach for the control experiment below once `list` says `Host` or
+  `Target` and the target is still silent.
 
 ## Troubleshooting: target silent after flash+boot
 
