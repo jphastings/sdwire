@@ -5,7 +5,7 @@ status: completed
 type: bug
 priority: high
 created_at: 2026-09-02T04:53:33Z
-updated_at: 2026-09-02T07:28:42Z
+updated_at: 2026-09-02T07:35:10Z
 ---
 
 Second bench report of the SDW-rmgj family, 2026-09-02 (raw write-up kept
@@ -160,3 +160,28 @@ re-powered the port and had the mux back at `Host` with `/dev/disk4` in
 7.6s. The "dead port" was only off: PORT_POWER persists across a replug,
 and nothing the operator ran on 2026-09-02 re-powered it. No hardware
 explanation needed.
+
+
+**Repeated-flash port check (08:31–08:34, report item 3).** Five back-to-back
+`sudo sdwire flash --debug /tmp/wifijoin-pi-zero-w.img` (272 MiB) on
+socket 1.1.4, `list` after each. All five exited 0 with no reader
+drop-off, no retry warnings, and `.1.1.4 Target` after every one, so the
+port honoured `PORT_POWER` off and on ten times in four minutes.
+
+| flash | total | write | median MiB/s | min | first-5 → last-5 |
+| --- | --- | --- | --- | --- | --- |
+| 1 (from Host) | 14s | 7.8s | 35.8 | 30.6 | 35.2 → 35.1 |
+| 2 (from Target) | 19s | 7.9s | 35.8 | 21.9 | 34.8 → 33.5 |
+| 3 | 19s | 7.8s | 35.8 | 30.8 | 34.2 → 35.7 |
+| 4 | 19s | 7.8s | 35.8 | 30.6 | 34.6 → 34.8 |
+| 5 | 18s | 7.8s | 35.7 | 30.3 | 35.0 → 34.7 |
+
+No throughput trend across flashes or within one (slowest chunk 182 ms,
+at a different offset each time). The extra ~5 s on flashes 2–5 is the
+cache revive from target mode. Nothing here supports repeated VBUS
+toggling degrading a TS4 port.
+
+**The target stayed silent.** 0 bytes on `/dev/cu.usbserial-0001`
+(115200 8N1) across five power cycles with the card handed over each time.
+Still the report's separate open question — image UART settings, board
+model, or wiring — and not something the mux can answer.
