@@ -5,7 +5,7 @@ status: completed
 type: bug
 priority: high
 created_at: 2026-09-02T04:53:33Z
-updated_at: 2026-09-02T07:24:36Z
+updated_at: 2026-09-02T07:28:42Z
 ---
 
 Second bench report of the SDW-rmgj family, 2026-09-02 (raw write-up kept
@@ -150,3 +150,13 @@ also stales the stamped entry's bus until the next live open, which
 `list` reported as one skipped port rather than hiding.
 Not run: repeated flashes on one port to look for PORT_POWER degradation
 (report item 3), and a flash at all — no target confirmed wired.
+
+
+**Episode 1 reproduced (08:30).** `switch dut` left socket 1.1.4 dark; JP
+unplugged the mux and plugged it back into the same socket. It did not
+enumerate (`ioreg` showed no `USB3.0-CRW`), `list` read `.1.1.4 Target`
+beside three `Unknown` empties, `state` read `Target`, and `switch host`
+re-powered the port and had the mux back at `Host` with `/dev/disk4` in
+7.6s. The "dead port" was only off: PORT_POWER persists across a replug,
+and nothing the operator ran on 2026-09-02 re-powered it. No hardware
+explanation needed.
