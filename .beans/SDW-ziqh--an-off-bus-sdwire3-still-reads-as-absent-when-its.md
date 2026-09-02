@@ -5,7 +5,7 @@ status: completed
 type: bug
 priority: high
 created_at: 2026-09-02T04:53:33Z
-updated_at: 2026-09-02T07:20:04Z
+updated_at: 2026-09-02T07:24:36Z
 ---
 
 Second bench report of the SDW-rmgj family, 2026-09-02 (raw write-up kept
@@ -141,8 +141,12 @@ could not be reproduced as-is.
 | `switch dut` → 6s → `revive` (config serial → cache → most recent) | `Revived 20120501030900000.1.1.4 at 0-1.1.4` | 5.0s |
 | `switch dut` → 6s → `revive -s 0-1.1.4` | same | 5.0s |
 
-Caveat on the `switch host` timing: the three older entries are on the
-wrong bus, so their hub opens fail instantly whatever the order; the
-most-recent-first ordering is pinned by unit test rather than by this run.
+Then with the dock moved back to bus 1 (08:24), all four entries readable:
+`list` showed `.1.1.4 Target` beside three `Unknown` empties, `state`
+still answered `Target`, and `switch host` took 7.8s — a wrong first
+pick would have cost ≥25s (5s dark + 20s wait), so the most-recent-first
+ordering is confirmed on hardware, not just by unit test. A dock move
+also stales the stamped entry's bus until the next live open, which
+`list` reported as one skipped port rather than hiding.
 Not run: repeated flashes on one port to look for PORT_POWER degradation
 (report item 3), and a flash at all — no target confirmed wired.
