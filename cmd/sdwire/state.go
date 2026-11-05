@@ -65,11 +65,10 @@ func newStateCmd(flags *globalFlags) *cobra.Command {
 		Use:   "state",
 		Short: "Print which side the selected SDWire's SD card is connected to",
 		Long: "Print which side the selected SDWire's SD card is currently connected to: " +
-			"Host, Target, or Unknown. When the device is attached and powered on, this is an " +
-			"honest live readback via the device. An SDWire3 currently in Target mode is " +
-			"powered off and unreachable over USB; in that case, state is inferred from the " +
-			"on-disk hub-port cache and a hub port-status read, without powering anything back " +
-			"on (see the README's SDWire3 notes).",
+			"Host, Target, or Unknown. For a device on the USB bus this is a live readback " +
+			"that never wakes a suspended SDWire3. For an SDWire3 that is off the bus, state " +
+			"is inferred from the on-disk hub-port cache and a hub port-status read, without " +
+			"powering anything back on (see the README's SDWire3 notes).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(ResolveConfigPath(flags.config))

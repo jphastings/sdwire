@@ -44,9 +44,11 @@ sdwire power off && sdwire switch host
 
 ## Rules
 
-- Be patient: re-powering an SDWire3's reader can take up to a minute by
-  design (readers can wedge if re-powered too fast; the CLI waits and
-  retries). Don't interrupt and rapid-retry by hand.
+- Be patient: `switch host` on an SDWire3 takes several seconds (the reader
+  is woken and given time to bring the card up before re-enumerating), and
+  reviving a crashed reader can take up to a minute by design (readers can
+  wedge if re-powered too fast; the CLI waits and retries). Don't interrupt
+  and rapid-retry by hand.
 - `switch dut` auto-unmounts the card's volumes first; close anything
   holding files open on them. No manual unmounting in either direction.
 - `power cycle` holds ≥8s dark deliberately (small boards ride through
@@ -54,33 +56,40 @@ sdwire power off && sdwire switch host
   boot — hence the boot flow ends in a power cycle.
 - `power off` is an abrupt cut: fine for appliance-style boards, but
   quiesce first if a writable data partition may be mid-write.
-- An SDWire3 must sit behind an external USB hub with per-port power
-  switching (see the project README); a root-port or ganged-hub setup
-  produces a clear error/warning rather than working.
+- On macOS and Linux an SDWire3 switches on any USB port. A hub with
+  per-port power switching is only needed for crash recovery (`revive`,
+  flash resume) — and on Windows, for switching at all (see the README).
 - `--json` on list/state/disk for scripting.
 
 ## When the mux "disappears"
 
-After `flash` or `switch dut` an SDWire3 is **off the USB bus by design**:
-target mode is implemented by cutting power to its hub port. An empty
-`sdwire list`, a `Target` row with no block device, or an old CLI's
-`state` "no SDWire device ... found" is the healthy post-flash state, not
-a fault. Read the `State` column of `sdwire list` before touching anything:
+After `flash` or `switch dut` an SDWire3 stays on the USB bus,
+**suspended**: target mode USB-suspends the reader, so `sdwire list` shows
+a `Target` row with no block device. That is the healthy post-flash state,
+not a fault. A row that vanishes, or an empty `list`, means the reader
+crashed off the bus. Read the `State` column of `sdwire list` before
+touching anything:
 
 | `list` shows | Meaning | Do |
 | --- | --- | --- |
 | `Host` + `/dev/diskN` | On the bus, card on this machine | Carry on |
-| `Target` | Port unpowered; card is with the target | `sdwire switch host` brings it back |
-| `Unknown` | Port powered, nothing enumerated: empty socket, or a reader that crashed off the bus | `sdwire revive -s <location>` |
+| `Target` | Reader suspended (or its hub port unpowered); card is with the target | `sdwire switch host` brings it back |
+| `Unknown` | Reader awake but unconfigured (something woke it), or a hub port powered with nothing on it: empty socket, or a reader that crashed off the bus | `sdwire switch dut`/`host` if it is listed as attached; otherwise `sdwire revive -s <location>` |
 
 - `power on|off|cycle` drive the mains plug only and never touch the mux:
   they succeed while it is off the bus and cannot bring it back.
-- A hub port switched off stays off across replugs and reboots. A mux
-  plugged into such a port does not enumerate until something re-powers
-  it; `switch host` does, a different socket merely sidesteps it.
-- Never plug an SDWire3 straight into the computer's own port: a root port
-  cannot be power-switched, so it enumerates but can never hand the card
-  to the target.
+- Anything that resumes the reader takes the card back to the host: the
+  computer waking from sleep, or another tool reading the reader's USB
+  descriptors (an older `sdwire` binary's `list` does). If `state` says
+  `Host`/`Unknown` where you expected `Target`, `sdwire switch dut` again.
+- An SDWire3 may go straight into the computer's own port: switching only
+  needs USB suspend. A root port can't be power-cycled, though, so `revive`
+  and flash crash recovery need the SDWire3 behind a hub with per-port
+  power switching.
+- A hub port left switched off (by an interrupted revive) stays off across
+  replugs and reboots. A mux plugged into such a port does not enumerate
+  until something re-powers it; `switch host` does, a different socket
+  merely sidesteps it.
 - Only reach for the control experiment below once `list` says `Host` or
   `Target` and the target is still silent.
 
@@ -97,6 +106,6 @@ power transitions is line bounce, not data.
 ## Serial console
 
 The mux gives no visibility into the target — pair it with a USB serial
-adapter on a *different* hub port (so captures survive the mux's power
-cycling), and start the capture before booting to record from the first
+adapter on a *different* hub port (so captures survive the mux
+re-enumerating or being power-cycled), and start the capture before booting to record from the first
 byte.

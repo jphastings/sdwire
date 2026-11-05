@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/gousb"
 	"github.com/jphastings/sdwire/hubpower"
+	"github.com/jphastings/sdwire/internal/usbsuspend"
 )
 
 const (
@@ -28,7 +29,7 @@ type DeviceGeneration int
 const (
 	// GenerationSDWireC represents the original SDWireC device using FTDI control.
 	GenerationSDWireC DeviceGeneration = iota
-	// GenerationSDWire3 represents the SDWire3 device using kernel driver attach/detach.
+	// GenerationSDWire3 represents the SDWire3 device, switched by USB-suspending its reader.
 	GenerationSDWire3
 )
 
@@ -130,20 +131,13 @@ func generationFor(desc *gousb.DeviceDesc) DeviceGeneration {
 }
 
 func describeDevice(dev *gousb.Device) *DeviceInfo {
-	serial, err := dev.SerialNumber()
-	if err != nil {
-		serial = "unknown"
-	}
-	product, err := dev.Product()
-	if err != nil {
-		product = "unknown"
-	}
-	manufacturer, err := dev.Manufacturer()
-	if err != nil {
-		manufacturer = "unknown"
-	}
+	serial, serialErr := dev.SerialNumber()
+	product, productErr := dev.Product()
+	manufacturer, manufacturerErr := dev.Manufacturer()
+	return infoFor(dev.Desc, orUnknown(serial, serialErr), orUnknown(product, productErr), orUnknown(manufacturer, manufacturerErr))
+}
 
-	desc := dev.Desc
+func infoFor(desc *gousb.DeviceDesc, serial, product, manufacturer string) *DeviceInfo {
 	return &DeviceInfo{
 		Serial:       serial,
 		Product:      product,
@@ -154,20 +148,74 @@ func describeDevice(dev *gousb.Device) *DeviceInfo {
 	}
 }
 
+func orUnknown(s string, err error) string {
+	if err != nil || s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 func closeDevices(devs []*gousb.Device) {
 	for _, dev := range devs {
 		dev.Close()
 	}
 }
 
+// discover finds every attached SDWire, in enumeration order. Where USB
+// suspend is supported an SDWire3 is described from the OS's device
+// registry and never opened, leaving its dev nil: reading its string
+// descriptors wakes a suspended reader, taking the card back from the
+// target, and on Linux even opening it does.
+func discover(ctx *gousb.Context) ([]deviceMatch, error) {
+	var order []*gousb.DeviceDesc
+	unopened := map[*gousb.DeviceDesc]*DeviceInfo{}
+	devs, err := ctx.OpenDevices(func(desc *gousb.DeviceDesc) bool {
+		if !matchesSDWire(desc) {
+			return false
+		}
+		order = append(order, desc)
+		if generationFor(desc) == GenerationSDWire3 && usbsuspend.Supported {
+			serial, product, manufacturer, err := usbStrings(desc.Bus, desc.Path)
+			unopened[desc] = infoFor(desc, orUnknown(serial, err), orUnknown(product, err), orUnknown(manufacturer, err))
+			return false
+		}
+		return true
+	})
+
+	opened := make(map[*gousb.DeviceDesc]*gousb.Device, len(devs))
+	for _, dev := range devs {
+		opened[dev.Desc] = dev
+	}
+	matches := make([]deviceMatch, 0, len(order))
+	for _, desc := range order {
+		if dev, ok := opened[desc]; ok {
+			matches = append(matches, deviceMatch{dev: dev, info: *describeDevice(dev)})
+		} else if info, ok := unopened[desc]; ok {
+			matches = append(matches, deviceMatch{info: *info})
+		}
+	}
+	if err != nil {
+		closeMatches(matches)
+		return nil, fmt.Errorf("failed to find USB devices: %w", err)
+	}
+	return matches, nil
+}
+
+func closeMatches(matches []deviceMatch) {
+	for _, m := range matches {
+		if m.dev != nil {
+			m.dev.Close()
+		}
+	}
+}
+
+// newController builds the controller for info's generation. dev is nil for
+// an SDWire3 that discover left unopened.
 func newController(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo, o *options) (DeviceController, error) {
 	switch info.Generation {
 	case GenerationSDWireC:
 		return &sdwireCController{device: dev}, nil
 	case GenerationSDWire3:
-		if o.legacySDWire3 {
-			return &sdwire3LegacyController{device: dev}, nil
-		}
 		return newSDWire3Controller(ctx, dev, info, o), nil
 	default:
 		return nil, fmt.Errorf("unsupported device generation: %v", info.Generation)
@@ -180,15 +228,15 @@ func ListDevices() ([]*DeviceInfo, error) {
 	ctx := gousb.NewContext()
 	defer ctx.Close()
 
-	devs, err := ctx.OpenDevices(matchesSDWire)
-	defer closeDevices(devs)
+	matches, err := discover(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find USB devices: %w", err)
+		return nil, err
 	}
+	defer closeMatches(matches)
 
-	devices := make([]*DeviceInfo, 0, len(devs))
-	for _, dev := range devs {
-		devices = append(devices, describeDevice(dev))
+	devices := make([]*DeviceInfo, 0, len(matches))
+	for _, m := range matches {
+		devices = append(devices, &m.info)
 	}
 	return devices, nil
 }
@@ -199,9 +247,9 @@ type DeviceState struct {
 	Mode SwitchMode
 	// Attached reports whether the device was enumerated on USB. False
 	// means it is known only from the hub-port cache: its remembered port
-	// is either unpowered (an SDWire3 in target mode) or powered with
-	// nothing enumerated on it — an empty socket, or a reader that has
-	// stopped answering and been torn off the bus by the OS.
+	// is either unpowered (an SDWire3 whose card is with the target) or
+	// powered with nothing enumerated on it — an empty socket, or a reader
+	// that has stopped answering and been torn off the bus by the OS.
 	Attached bool
 }
 
@@ -209,9 +257,9 @@ type DeviceState struct {
 // each one's card is switched to: the devices currently enumerated on USB,
 // plus every hub-port cache entry that is not currently producing one.
 //
-// It never powers a port on or off — an SDWire3 sitting in target mode stays
-// there — so unlike the New-family constructors it is safe to call just to
-// see what is around. Cache-derived entries are a claim about a remembered
+// It never powers a port on or off and never talks to an SDWire3's reader —
+// one sitting in target mode stays there — so unlike the New-family
+// constructors it is safe to call just to see what is around. Cache-derived entries are a claim about a remembered
 // location rather than a device seen now: see DeviceState.Attached.
 func ListDeviceStates(opts ...Option) ([]DeviceState, error) {
 	o := defaultOptions()
@@ -222,18 +270,17 @@ func ListDeviceStates(opts ...Option) ([]DeviceState, error) {
 	ctx := gousb.NewContext()
 	defer ctx.Close()
 
-	devs, err := ctx.OpenDevices(matchesSDWire)
-	defer closeDevices(devs)
+	matches, err := discover(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find USB devices: %w", err)
+		return nil, err
 	}
+	defer closeMatches(matches)
 
-	states := make([]DeviceState, 0, len(devs))
-	attached := make(map[string]bool, len(devs))
-	for _, dev := range devs {
-		info := *describeDevice(dev)
-		attached[info.Location()] = true
-		states = append(states, DeviceState{Info: info, Mode: attachedMode(dev, info, o), Attached: true})
+	states := make([]DeviceState, 0, len(matches))
+	attached := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		attached[m.info.Location()] = true
+		states = append(states, DeviceState{Info: m.info, Mode: attachedMode(m.dev, m.info, o), Attached: true})
 	}
 
 	cached, err := cachedDeviceStates(ctx, o, attached)
@@ -244,21 +291,20 @@ func ListDeviceStates(opts ...Option) ([]DeviceState, error) {
 	return append(states, cached...), nil
 }
 
-// attachedMode reports the mode of a device that is currently enumerated.
-// An SDWire3 leaves host mode only by losing power, which drops it off the
-// bus, so an enumerated one has its card on the host by construction — but
-// not under WithLegacySDWire3Switching, whose mechanism leaves the device
-// enumerated in both modes with no honest readback. An SDWireC stays
-// enumerated either way and is asked directly.
+// attachedMode reports the mode of a device that is currently enumerated,
+// asking its controller. The exception is an SDWire3 on a platform that
+// switches it by hub-port power, where an enumerated reader is a powered
+// one and so on the host by construction.
 func attachedMode(dev *gousb.Device, info DeviceInfo, o *options) SwitchMode {
+	var ctrl DeviceController = &sdwireCController{device: dev}
 	if info.Generation == GenerationSDWire3 {
-		if o.legacySDWire3 {
-			return ModeUnknown
+		if !usbsuspend.Supported {
+			return ModeHost
 		}
-		return ModeHost
+		ctrl = &sdwire3Controller{info: info}
 	}
 
-	mode, err := (&sdwireCController{device: dev}).Mode()
+	mode, err := ctrl.Mode()
 	if err != nil {
 		o.warnFunc(fmt.Sprintf("reading mode of %s: %v", info.Identity(), err))
 		return ModeUnknown
@@ -302,21 +348,15 @@ func connect(sel selection, opts []Option) (*SDWire, error) {
 
 	ctx := gousb.NewContext()
 
-	devs, err := ctx.OpenDevices(matchesSDWire)
+	candidates, err := discover(ctx)
 	if err != nil {
-		closeDevices(devs)
 		ctx.Close()
-		return nil, fmt.Errorf("failed to find USB devices: %w", err)
-	}
-
-	candidates := make([]deviceMatch, len(devs))
-	for i, dev := range devs {
-		candidates[i] = deviceMatch{dev: dev, info: *describeDevice(dev)}
+		return nil, err
 	}
 
 	idx, pickErr := sel.pick(candidates)
 	if pickErr != nil {
-		closeDevices(devs)
+		closeMatches(candidates)
 		// Only an outright "nothing matched" is worth trying the cache
 		// fallback for; an ambiguous-match error means real candidates
 		// exist and should be reported, not silently resolved by picking
@@ -336,7 +376,7 @@ func connect(sel selection, opts []Option) (*SDWire, error) {
 
 	chosen := candidates[idx]
 	for i, c := range candidates {
-		if i != idx {
+		if i != idx && c.dev != nil {
 			c.dev.Close()
 		}
 	}
@@ -347,7 +387,9 @@ func connect(sel selection, opts []Option) (*SDWire, error) {
 func finishConnect(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo, o *options) (*SDWire, error) {
 	controller, err := newController(ctx, dev, info, o)
 	if err != nil {
-		dev.Close()
+		if dev != nil {
+			dev.Close()
+		}
 		ctx.Close()
 		return nil, err
 	}
@@ -471,16 +513,15 @@ func (s *SDWire) String() string {
 // SetMode switches the SD card between the target device and the host
 // computer.
 //
-// For SDWire3 devices (the default; see WithLegacySDWire3Switching for the
-// legacy kernel-driver-based mechanism), this works by cutting or restoring
-// VBUS on the SDWire3's upstream USB hub port, rather than by any command
-// understood by the SDWire3 itself:
-//   - ModeTarget cuts power to the SDWire3 reader. Losing power drops it
-//     off the bus entirely, and the now-unpowered mux passes the SD card
-//     through to the target — typically within about a second.
-//   - ModeHost restores power. The reader re-enumerates at its USB
-//     power-on default (card connected to the host); the resulting block
-//     device typically appears roughly 6 seconds later.
+// SDWire3 devices have no switching command: their reader hands the card
+// to the target while it is USB-suspended (see sdwire3Controller).
+//   - ModeTarget unconfigures and suspends the reader. It stays enumerated,
+//     so ListDeviceStates still shows it, as Target.
+//   - ModeHost resumes it and waits for it to come back configured; the
+//     card's block device typically appears a few seconds later.
+//
+// On Windows, which has no userspace suspend control, ModeTarget instead
+// cuts VBUS on the reader's upstream hub port and ModeHost restores it.
 //
 // Because a target board normally only probes its SD slot at boot or on a
 // card-detect edge, it will not notice a card that arrived via ModeTarget
@@ -530,10 +571,9 @@ func WithoutUnmount() ModeOption {
 	}
 }
 
-// Mode reads back which side the SD card is currently connected to. Not
-// all controllers can answer honestly — see the relevant
-// DeviceController's Mode doc comment (in particular,
-// WithLegacySDWire3Switching's controller cannot).
+// Mode reads back which side the SD card is currently connected to, or
+// ModeUnknown where the device is between the two (see the relevant
+// DeviceController's Mode doc comment).
 func (s *SDWire) Mode() (SwitchMode, error) {
 	return s.controller.Mode()
 }

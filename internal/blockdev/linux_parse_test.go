@@ -136,8 +136,8 @@ func TestMountpointsForDisk(t *testing.T) {
 }
 
 func TestUSBDeviceDirName(t *testing.T) {
-	if got := usbDeviceDirName(1, []int{1, 1, 3}); got != "1-1.1.3" {
-		t.Errorf("usbDeviceDirName = %q, want 1-1.1.3", got)
+	if got := SysfsName(1, []int{1, 1, 3}); got != "1-1.1.3" {
+		t.Errorf("SysfsName = %q, want 1-1.1.3", got)
 	}
 }
 

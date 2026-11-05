@@ -11,9 +11,8 @@ const defaultHostWaitTimeout = 20 * time.Second
 // options holds the fully-resolved configuration for a connect() call.
 // Options are applied to it before any controller is constructed, since
 // SDWire3 controller construction itself depends on them (warn func,
-// host-wait timeout, hub cache path, legacy switching).
+// host-wait timeout, hub cache path).
 type options struct {
-	legacySDWire3   bool
 	warnFunc        func(msg string)
 	hostWaitTimeout time.Duration
 	hubCachePath    string
@@ -36,17 +35,6 @@ type Option func(*options)
 func WithTargetPower(fn PowerFunc) Option {
 	return func(o *options) {
 		o.powerFunc = fn
-	}
-}
-
-// WithLegacySDWire3Switching makes SDWire3 devices use the legacy
-// kernel-driver detach/reset controller instead of the default VBUS
-// port-power controller. That mechanism is not known to reliably move the
-// SD card mux (see sdwire3Controller's doc comment), but may work on some
-// native Linux setups; it is never the default.
-func WithLegacySDWire3Switching() Option {
-	return func(o *options) {
-		o.legacySDWire3 = true
 	}
 }
 
@@ -82,8 +70,8 @@ func WithHubCachePath(path string) Option {
 // device matches, connect() returns the not-found error as-is instead of
 // powering on a cached hub port and waiting for the device to reappear.
 // Read-only callers (e.g. the sdwire CLI's `state` command) use this so
-// they never have the side effect of switching an SDWire3 that is
-// intentionally powered off in target mode back to host mode.
+// they never have the side effect of power-cycling a hub port, which would
+// bring an off-bus SDWire3 back in host mode.
 func WithoutRevive() Option {
 	return func(o *options) {
 		o.withoutRevive = true

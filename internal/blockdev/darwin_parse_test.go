@@ -18,8 +18,8 @@ func TestPackLocationID(t *testing.T) {
 		{1, nil, 0x01000000},
 	}
 	for _, c := range cases {
-		if got := packLocationID(c.bus, c.ports); got != c.want {
-			t.Errorf("packLocationID(%d, %v) = %#08x, want %#08x", c.bus, c.ports, got, c.want)
+		if got := PackLocationID(c.bus, c.ports); got != c.want {
+			t.Errorf("PackLocationID(%d, %v) = %#08x, want %#08x", c.bus, c.ports, got, c.want)
 		}
 	}
 }

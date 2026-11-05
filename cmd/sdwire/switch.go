@@ -7,13 +7,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// errSwitchOffUnsupported explains why "off" isn't a switch mode: for
-// SDWireC there's no third state, and for SDWire3 "powering the port off"
-// is precisely how ModeTarget is implemented (see sdwire3Controller's doc
-// comment) — it does not mean disconnected-from-both.
-var errSwitchOffUnsupported = errors.New(`"off" is not supported: SDWireC has no third connection state, ` +
-	`and for SDWire3 powering the reader off is how target mode is switched to (see sdwire.ModeTarget) — ` +
-	`not a disconnected-from-both state. Use "target"/"dut" or "host"/"ts" instead`)
+// errSwitchOffUnsupported explains why "off" isn't a switch mode: neither
+// generation has a disconnected-from-both state. A suspended or unpowered
+// SDWire3 reader hands the card to the target (see sdwire3Controller's doc
+// comment).
+var errSwitchOffUnsupported = errors.New(`"off" is not supported: neither SDWireC nor SDWire3 has a ` +
+	`disconnected-from-both state (a suspended or unpowered SDWire3 reader hands the card to the target). ` +
+	`Use "target"/"dut" or "host"/"ts" instead`)
 
 // resolveSwitchMode maps a switch subcommand argument to a SwitchMode. It
 // returns errSwitchOffUnsupported for "off"; any other value is rejected
@@ -78,12 +78,11 @@ func applyMode(cmd *cobra.Command, flags *globalFlags, res *openResult, mode sdw
 }
 
 // switchToTarget implements `switch dut`/`switch target`. A device that
-// isn't currently live (openSelected's WithoutRevive-guarded attempt fails
-// not-found) may simply already be in target mode — an SDWire3 sitting
-// powered off, which is exactly what target mode looks like. Reviving it
-// just to confirm that, and switch it right back to where it already was,
-// would be pure churn, so the hub-port cache is consulted first; only a
-// device that isn't already in target mode gets revived.
+// isn't on the bus (openSelected's WithoutRevive-guarded attempt fails
+// not-found) may still have its card with the target — an SDWire3 on an
+// unpowered hub port. Reviving it just to switch it right back would be
+// pure churn, so the hub-port cache is consulted first; only a device that
+// isn't already in target mode gets revived.
 func switchToTarget(cmd *cobra.Command, flags *globalFlags, cfg *Config, noUnmount bool) error {
 	var modeOpts []sdwire.ModeOption
 	if noUnmount {

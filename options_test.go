@@ -7,9 +7,6 @@ import (
 
 func TestDefaultOptions(t *testing.T) {
 	o := defaultOptions()
-	if o.legacySDWire3 {
-		t.Error("expected legacy SDWire3 switching to be off by default")
-	}
 	if o.hostWaitTimeout != defaultHostWaitTimeout {
 		t.Errorf("hostWaitTimeout = %v, want %v", o.hostWaitTimeout, defaultHostWaitTimeout)
 	}
@@ -37,14 +34,6 @@ func TestWithWarningHandlerNilLeavesDefault(t *testing.T) {
 		t.Fatal("expected default warn func to remain set")
 	}
 	o.warnFunc("must not panic")
-}
-
-func TestWithLegacySDWire3Switching(t *testing.T) {
-	o := defaultOptions()
-	WithLegacySDWire3Switching()(o)
-	if !o.legacySDWire3 {
-		t.Error("expected legacySDWire3 to be enabled")
-	}
 }
 
 func TestWithHostWaitTimeout(t *testing.T) {

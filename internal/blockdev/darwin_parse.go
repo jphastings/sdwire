@@ -6,14 +6,14 @@ import (
 	"strings"
 )
 
-// packLocationID computes macOS's packed USB locationID for a device at a
+// PackLocationID computes macOS's packed USB locationID for a device at a
 // given bus and USB port path: the bus number occupies the top byte, and
 // each port number (1-based, as gousb's DeviceDesc.Path reports) occupies
 // successive nibbles from bit 20 down to bit 0, e.g. bus 1, ports [1,1,3]
 // -> 0x01113000. Only the first 6 ports are representable; deeper ports are
 // ignored (matching what macOS itself does — USB tops out well below that
 // depth in practice).
-func packLocationID(bus int, ports []int) uint32 {
+func PackLocationID(bus int, ports []int) uint32 {
 	id := uint32(bus&0xFF) << 24
 	for i, p := range ports {
 		shift := 20 - 4*i
@@ -33,7 +33,7 @@ func bsdNameFromPath(path string) string {
 
 // findDarwin parses `ioreg -a -r -c IOUSBHostDevice -l` XML plist output
 // (data) and locates the whole-disk BSD name and size for the device
-// identified by ref, matched by locationID (see packLocationID),
+// identified by ref, matched by locationID (see PackLocationID),
 // idVendor, and idProduct. It errors if no device matches, or if the
 // matched device(s) collectively yield more than one whole-disk BSD name.
 func findDarwin(data []byte, ref Ref) (bsdName string, sizeBytes int64, err error) {
@@ -42,7 +42,7 @@ func findDarwin(data []byte, ref Ref) (bsdName string, sizeBytes int64, err erro
 		return "", 0, fmt.Errorf("blockdev: parsing ioreg output: %w", err)
 	}
 
-	wantLoc := packLocationID(ref.Bus, ref.PortPath)
+	wantLoc := PackLocationID(ref.Bus, ref.PortPath)
 	disks := collectWholeDisks(root, wantLoc, ref.Vendor, ref.Product)
 
 	switch len(disks) {

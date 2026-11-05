@@ -359,7 +359,7 @@ func revivePortRef(ctx *gousb.Context, o *options, selector string) (*hubpower.P
 
 // statusToMode maps a hub port's live power/connection status to the
 // SwitchMode it implies for an SDWire3: an unpowered port means the reader
-// is off the bus entirely and the mux has handed the SD card to the
+// is off the bus entirely, and an unpowered mux hands the SD card to the
 // target; a powered, connected port means the reader has (re-)enumerated
 // on the host; a powered but not-yet-connected port is a brief
 // transitional state (e.g. mid re-enumeration), reported honestly as
@@ -440,10 +440,10 @@ func selectCacheEntry(entries map[string]*hubpower.PortRef, selector, cachePath 
 
 // CachedPortState reports an SDWire3's mode purely from the on-disk hub
 // cache and a hub port-status read, WITHOUT powering anything on or off —
-// safe for a device that is currently powered off (in target mode). This
-// is the read-only counterpart to New's cache-revive fallback: it never
-// causes an SDWire3 sitting in target mode to switch to host mode as a
-// side effect of being asked about it.
+// for a device that is not on the bus, so cannot be asked itself (its hub
+// port is unpowered, or it has crashed off it). This is the read-only
+// counterpart to New's cache-revive fallback: it never brings such a
+// device back in host mode as a side effect of being asked about it.
 //
 // selector may be "" (which requires exactly one cached entry, erroring
 // and listing candidates otherwise), or a serial / port-suffixed identity

@@ -9,7 +9,7 @@ import (
 
 // Find returns the whole-disk block device path (e.g. /dev/disk4) for the
 // USB device identified by ref. It runs `ioreg -a -r -c IOUSBHostDevice -l`
-// and matches devices by locationID (see packLocationID), idVendor, and
+// and matches devices by locationID (see PackLocationID), idVendor, and
 // idProduct. It errors if no device matches, or if the matched device's
 // registry subtree yields more than one whole-disk BSD name.
 //

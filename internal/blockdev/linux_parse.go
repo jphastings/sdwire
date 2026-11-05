@@ -14,9 +14,9 @@ import (
 // e.g. for mmcblk devices) without risking an unbounded walk.
 const maxUSBDeviceWalkDepth = 6
 
-// usbDeviceDirName returns the sysfs device directory name for a device at
+// SysfsName returns the sysfs device directory name for a device at
 // a given bus and USB port path, e.g. bus 1, path [1,1,3] -> "1-1.1.3".
-func usbDeviceDirName(bus int, path []int) string {
+func SysfsName(bus int, path []int) string {
 	parts := make([]string, len(path))
 	for i, p := range path {
 		parts[i] = strconv.Itoa(p)
@@ -43,7 +43,7 @@ func readHexFile(fsys fs.FS, p string) (uint16, error) {
 // maxUSBDeviceWalkDepth) for directories named "block", collecting their
 // entries as candidate block device names.
 func findLinux(fsys fs.FS, ref Ref) (string, error) {
-	entry := usbDeviceDirName(ref.Bus, ref.PortPath)
+	entry := SysfsName(ref.Bus, ref.PortPath)
 
 	vendor, err := readHexFile(fsys, path.Join(entry, "idVendor"))
 	if err != nil {

@@ -8,7 +8,8 @@ between a host computer (for flashing images) and a target device under test
 (for booting them), without physically re-seating the card.
 
 The CLI is a drop-in replacement for the [official python package](https://badgerd.nl/sdwirec/#quick-start), but includes:
-- hub-power fallback for SDWire3 (which otherwise can [cause failures](https://github.com/Badger-Embedded/sdwire-cli/issues/27))
+- SDWire3 switching on macOS as well as Linux, on any USB port — no power-switching hub needed (see [SDWire3 switching](#sdwire3-switching))
+- recovery for an SDWire3 reader that crashes mid-write, by power-cycling its hub port
 - disk unmounting from the host before switching to target mode
 - support for power managing the target (currently using Meross WiFi power plugs)
 - one-shot command for updaing the target SD card image; the flow:
@@ -64,16 +65,16 @@ Serial                        Product Info		Block Dev		State
 20120501030900000.1.1.3       [0bda::0316]		/dev/disk4		Host
 ```
 
-Devices remembered in the [hub-port cache](#sdwire3-state-semantics) are
-listed even when they aren't on the USB bus, since an SDWire3 in target
-mode is powered off and cannot be enumerated at all. For those, `State` is
-read from the hub port without powering anything on:
+An SDWire3 in target mode stays on the bus, suspended, and is listed as
+`Target`. Devices remembered in the [hub-port cache](#sdwire3-switching)
+are listed too when they aren't on the bus; for those, `State` is read from
+the hub port without powering anything on.
 
 | State | Meaning |
 | --- | --- |
 | `Host` | The card is connected to this computer. |
-| `Target` | The port is unpowered: the card is with the target board. |
-| `Unknown` | The port is powered but nothing is enumerated on it — an empty socket, or a reader that has crashed and been dropped from the bus. Recover the latter with [`sdwire revive`](#sdwire-revive). |
+| `Target` | The reader is suspended, or its hub port unpowered: the card is with the target board. |
+| `Unknown` | The reader is awake but unconfigured (something woke it), or its hub port is powered with nothing enumerated on it — an empty socket, or a reader that has crashed and been dropped from the bus. Recover the latter with [`sdwire revive`](#sdwire-revive). |
 
 The first three columns keep the Python CLI's exact widths and separators,
 so anything parsing that output by position still works; `--json` carries
@@ -87,10 +88,9 @@ forget them.
 ### `sdwire state`
 
 Print which side the selected device's SD card is currently connected to:
-`Host`, `Target`, or `Unknown`. When the device is attached and powered on,
-this is an honest live readback via the device — see
-[SDWire3 state semantics](#sdwire3-state-semantics) below for how a
-powered-off (target mode) SDWire3 is handled instead.
+`Host`, `Target`, or `Unknown`. This is a live readback that never wakes a
+suspended SDWire3; for one that is off the bus, see
+[SDWire3 switching](#sdwire3-switching).
 
 ```
 $ sdwire state
@@ -102,9 +102,8 @@ Serial                        	State
 
 Switch the selected device's SD card. `dut`/`target` connect it to the
 target board; `host`/`ts` connect it to this computer. `off` is rejected
-with an explanation: SDWireC has no third state, and for SDWire3 "powering
-the port off" is literally how target mode is implemented — it does not
-mean disconnected from both sides. Prints nothing and exits `0` on success.
+with an explanation: neither generation has a disconnected-from-both state
+(a suspended or unpowered SDWire3 reader hands the card to the target). Prints nothing and exits `0` on success.
 
 ```bash
 sdwire switch host              # connect the card to this computer
@@ -125,7 +124,9 @@ sdwire revive -s 1-1.1.3      # by location, straight from live USB topology
 Use it when a reader has stopped answering and been dropped from the bus —
 `sdwire list` shows `Unknown`, or nothing at all. A USB port reset does not
 clear that state; only removing power does, and the port is held dark long
-enough for the reader's own supply to drain rather than merely reset.
+enough for the reader's own supply to drain rather than merely reset. That
+needs the SDWire3 behind an external hub with per-port power switching: a
+computer's built-in ports can't be power-cycled.
 
 Because such a device isn't enumerated, it can't be selected by serial
 alone. `-s`/`--serial` accepts a **location** (`1-1.1.3`, as shown by
@@ -152,9 +153,9 @@ flashed 1234 / 3800 MiB (32%)
 
 If the reader stops responding part-way through the write — see
 [the reader-wedge entry](#troubleshooting) below — the flash does not fail.
-Its hub port is power-cycled, the reader is waited for at the same USB
-location, and the write resumes from the last completed chunk, up to three
-times:
+Its hub port is power-cycled (when it sits behind a hub that can switch
+port power), the reader is waited for at the same USB location, and the
+write resumes from the last completed chunk, up to three times:
 
 ```
 flashed 96 / 272 MiB (35%)
@@ -224,9 +225,8 @@ $ sdwire disk --json
 
 ### `--debug` and warnings
 
-SDK warnings (for example, an SDWire3 sitting behind a hub that only
-switches port power in a ganged fashion, affecting sibling ports) always
-print to stderr, whether or not `--debug` is set. `--debug` adds further
+SDK warnings (for example, a hub-port cache entry that couldn't be read)
+always print to stderr, whether or not `--debug` is set. `--debug` adds further
 diagnostics — the resolved config path, which device a selector matched,
 and so on.
 
@@ -332,26 +332,38 @@ which -a sdwire
 version lives (often an Anaconda/Miniconda `bin` directory, or a `pip`
 `--user` install path) in `PATH`, or `pip uninstall sdwire` the Python one.
 
-#### SDWire3 state semantics
+#### SDWire3 switching
 
-For SDWire3, a device currently in target mode is, physically, **powered
-off** — it isn't enumerable on USB at all. `sdwire state` never powers a
-device on to answer: when there's nothing live to read, it falls back to
-the on-disk hub-port cache and a direct hub port-status read, which is
-enough to report `Target` honestly without side effects. `sdwire switch
-dut`/`target` does the same check before doing any work, so switching a
-device that's already in target mode is also a no-op. Only commands that
-need the SD card to actually move data — `switch host`/`ts` and `flash` —
-revive a powered-off SDWire3 via the cache, since restoring power is
-inherent to what those commands do.
+An SDWire3 is a single Realtek reader with no switching command. The card
+goes to the target exactly while the reader is **USB-suspended**: target
+mode unconfigures and suspends it, host mode wakes and re-enumerates it.
+It stays on the bus either way, so `list` and `state` read its mode live,
+and nothing they do wakes it.
 
-That cache is a separate file from your config, at `<user cache
-dir>/sdwire/hubports.json` — `~/Library/Caches/sdwire/hubports.json` on
-macOS, `~/.cache/sdwire/hubports.json` on Linux,
+- **macOS** — works on any port, including directly on the Mac; no hub and
+  no privileges needed.
+- **Linux** — needs write access to the reader's sysfs power attributes
+  and usbfs node: install the [udev rule](#permissions), or run as root.
+- **Windows** has no userspace suspend control, so target mode cuts power
+  to the reader's upstream hub port instead (an unpowered reader leaves
+  the card with the target too). That needs a hub with per-port power
+  switching.
+
+Anything that resumes the reader takes the card back from the target: the
+computer waking from sleep, or another program reading the reader's USB
+descriptors (older `sdwire` binaries' `list` did). `state` then reads
+`Host` or `Unknown`; `sdwire switch target` puts it back.
+
+When an SDWire3 sits behind a hub, its hub port is remembered so a reader
+that crashes off the bus can still be found and [revived](#sdwire-revive).
+An off-bus device's `state` is read from that port without powering
+anything on, and `switch dut`/`target` checks it first so a device whose
+port is already dark is left alone. The cache is a separate file from your
+config, at `<user cache dir>/sdwire/hubports.json` —
+`~/Library/Caches/sdwire/hubports.json` on macOS,
+`~/.cache/sdwire/hubports.json` on Linux,
 `%LocalAppData%\sdwire\hubports.json` on Windows. Any command that finds a
-device live rewrites its entry, so deleting the file is safe: the worst
-that happens is a device sitting in target mode can't be found again until
-it's powered back on some other way.
+device live rewrites its entry, so deleting the file is safe.
 
 A device moved between sockets over its life leaves one entry per socket,
 and nothing removes the old ones — every SDWire3 shares one Realtek serial,
@@ -376,9 +388,9 @@ as Administrator on Windows.
 SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="6001", MODE="0666"
 # SDWire3 (Realtek reader)
 SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="0316", MODE="0666"
-# SDWire3 switching also needs write access to its upstream hub, since the
-# card is handed to the target by cutting that hub port's power (VBUS).
-# Either run as root, or grant access to hub devices:
+# SDWire3 target mode is runtime suspend, which must be allowed
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="0316", TEST=="power/control", ATTR{power/autosuspend_delay_ms}="0", ATTR{power/control}="auto"
+# Optional: `sdwire revive` and flash recovery power-cycle the hub port
 SUBSYSTEM=="usb", ATTR{bDeviceClass}=="09", MODE="0666"
 ```
 
@@ -390,8 +402,8 @@ sudo udevadm trigger
 sudo usermod -a -G plugdev $USER
 ```
 
-**Windows.** SDWire3 switching needs libusb access to the upstream hub, not
-just the reader — install [UsbDk](https://github.com/daynix/UsbDk), or bind
+**Windows.** SDWire3 switching uses hub port power there, so needs libusb
+access to the upstream hub, not just the reader — install [UsbDk](https://github.com/daynix/UsbDk), or bind
 the hub to WinUSB with [Zadig](https://zadig.akeo.ie/).
 
 ## SDK quick-start
@@ -445,9 +457,9 @@ identical to what the CLI's `-s` flag accepts); `SetMode`/`Mode` switch and
 read back the card's side; `PowerCycle` and `TargetPower` drive a
 configured `PowerFunc` directly, independent of flashing;
 `WithoutRevive()` disables the hub-cache power-on fallback for callers that
-must not risk switching a target-mode SDWire3 back to host mode;
-`CachedPortState` reads an SDWire3's mode from the on-disk hub cache
-without powering anything on or off at all, for exactly that case;
+must not power-cycle a hub port as a side effect;
+`CachedPortState` reads an off-bus SDWire3's mode from the on-disk hub
+cache without powering anything on or off at all;
 `WithWriteRetries` and `WithWriteTiming` tune a flash's recovery from a
 reader that drops off the bus mid-write, and expose its per-chunk write
 timings; `ListDeviceStates()` is the same idea for the whole inventory, returning
@@ -470,13 +482,9 @@ other selector can reach it.
 SDWireC shows up as USB `04e8:6001`, SDWire3 as `0bda:0316`. On Linux,
 check the udev rules above; on Windows, check libusb/UsbDk binding.
 
-**SDWire3 stuck in target mode.** This is expected, not broken — see
-[SDWire3 state semantics](#sdwire3-state-semantics). `sdwire switch
-host`/`ts` and `sdwire flash` (and, in the SDK, `New`/`NewWithSerial`/
-`NewWithIdentity` by default) revive it via the on-disk hub-port cache,
-powering it back on into host mode; `state`, `list` and `power` never do.
-[`sdwire revive`](#sdwire-revive) forces the same thing explicitly, for a
-device too broken to be selected the usual way.
+**SDWire3 back on the host without being switched.** Something resumed the
+suspended reader — see [SDWire3 switching](#sdwire3-switching). `sdwire
+switch target` puts it back.
 
 **The reader vanishes mid-flash and only comes back on a physical replug.**
 The SD reader inside an SDWire3 can stop answering under sustained writes.
@@ -512,11 +520,10 @@ indexing a freshly mounted volume, or anything enumerating USB) adds load
 at exactly the wrong moment.
 
 **"device is attached to a root hub port" / a `hubpower.ErrRootPort`-shaped
-error.** SDWire3 switching works by cutting power to the device's
-*upstream hub port*; a device plugged directly into a computer's built-in
-(root) USB port has no controllable parent to do that through — see
-[the VBUS story](#the-sdwire3-vbus-story) above. Attach it behind an
-external hub with independent per-port power switching instead.
+error.** `revive` and flash recovery power-cycle the reader's *upstream hub
+port*, and a computer's built-in (root) port has none to control. Switching
+doesn't need one (except on Windows); if you want crash recovery, put the
+SDWire3 behind an external hub with per-port power switching.
 
 ## Contributing
 

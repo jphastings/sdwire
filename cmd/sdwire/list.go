@@ -96,13 +96,12 @@ func newListCmd(flags *globalFlags) *cobra.Command {
 		Short: "List attached SDWire devices",
 		Long: "List SDWire devices, their USB product info, the reader's block device " +
 			"path, and which side each card is switched to.\n\n" +
-			"Devices remembered in the hub-port cache are listed too, even when they " +
-			"aren't currently on the USB bus — an SDWire3 in Target mode is powered " +
-			"off, so enumeration alone cannot see it. For those, State is read from " +
-			"the hub port without powering anything on: Target means the port is off " +
-			"(the card is with the target), and Unknown means the port is powered but " +
-			"nothing is enumerated on it — an empty socket, or a reader that has " +
-			"crashed and been dropped from the bus. Recover the latter with " +
+			"Devices remembered in the hub-port cache are listed too when they aren't " +
+			"currently on the USB bus. For those, State is read from the hub port " +
+			"without powering anything on: Target means the port is off (an unpowered " +
+			"reader leaves the card with the target), and Unknown means the port is " +
+			"powered but nothing is enumerated on it — an empty socket, or a reader " +
+			"that has crashed and been dropped from the bus. Recover the latter with " +
 			"`sdwire revive`.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

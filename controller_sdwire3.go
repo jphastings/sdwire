@@ -3,25 +3,43 @@ package sdwire
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/google/gousb"
 	"github.com/jphastings/sdwire/hubpower"
+	"github.com/jphastings/sdwire/internal/usbsuspend"
 )
 
-// sdwire3Controller implements DeviceController for SDWire3 devices by
-// cutting and restoring VBUS on the SDWire3's upstream USB hub port.
+// Indirections over internal/usbsuspend, swapped out in tests.
+var (
+	usbStateOf = usbsuspend.StateOf
+	usbStrings = usbsuspend.Strings
+	usbSuspend = usbsuspend.Suspend
+	usbResume  = usbsuspend.Resume
+)
+
+// suspendTimeout is how long SetMode(ModeTarget) waits for the reader to
+// report itself suspended.
+const suspendTimeout = 5 * time.Second
+
+const statePollInterval = 250 * time.Millisecond
+
+// sdwire3Controller implements DeviceController for SDWire3 devices.
 //
-// The SDWire3 (a single Realtek 0BDA:0316 SD reader, with no FTDI
-// sidecar) never hands the SD card to the target while its own USB link
-// stays up — the kernel-driver detach/reset trick sdwire3LegacyController
-// uses does not move the mux. What does work is depriving the SDWire3 of
-// power altogether: clearing PORT_POWER on its upstream hub port makes the
-// reader disappear from the bus entirely, and the now-unpowered mux passes
-// the card through to the target (observed ~1s). Restoring PORT_POWER
-// re-powers the reader, which re-enumerates at its USB power-on default —
-// card connected to the host — with the resulting block device typically
-// appearing ~6s later.
+// The SDWire3 is a single Realtek RTS5306E SD reader (0BDA:0316) with no
+// FTDI sidecar. Its suspend output, meant to cut power to the SD card, also
+// drives the mux, so the card is with the target exactly while the reader
+// is USB-suspended — or unpowered, which holds that pin the same way.
+//
+// Where the OS lets userspace suspend a USB device (macOS and Linux; see
+// internal/usbsuspend), ModeTarget suspends the reader and ModeHost
+// resumes it, on any USB port. Where it doesn't (Windows), ModeTarget cuts
+// VBUS on the reader's upstream hub port instead, which needs a hub with
+// per-port power switching, and ModeHost restores it.
+//
+// Either way, Revive power-cycles that hub port to recover a reader that
+// has latched up mid-transfer, when the reader sits behind such a hub.
 //
 // Because a target board normally only probes its SD slot at boot or on a
 // card-detect edge, it will not notice a card that arrived via ModeTarget
@@ -32,24 +50,25 @@ type sdwire3Controller struct {
 	warn            func(string)
 	hostWaitTimeout time.Duration
 
-	device *gousb.Device // nil while switched to ModeTarget (powered off)
+	// device is nil unless a revive or a hub-power switch to ModeHost
+	// opened the reader.
+	device *gousb.Device
 	port   *hubpower.Port
 
-	// resolveErr, when set, is returned from SetMode and Mode instead of
-	// attempting to use port (which may be nil). It is not treated as a
-	// construction failure so that listing/getters keep working even for
-	// a device whose upstream hub port couldn't be resolved or opened
-	// (e.g. one sitting directly on a root port).
+	// resolveErr, when set, is returned from whatever needs port (Revive,
+	// and switching where USB suspend is unsupported) instead of using it.
+	// It is not a construction failure, so a device whose upstream hub
+	// port couldn't be resolved or opened (e.g. one sitting directly on a
+	// root port) can still be listed and switched.
 	resolveErr error
 }
 
 var _ DeviceController = (*sdwire3Controller)(nil)
 
-// newSDWire3Controller resolves dev's upstream hub port, caches it to disk
-// keyed by info.Identity(), and opens it for power control. It never
+// newSDWire3Controller resolves the reader's upstream hub port, caches it to
+// disk keyed by info.Identity(), and opens it for power control. It never
 // returns an error: any failure to resolve or open the hub port is stored
-// and surfaced from SetMode/Mode instead, so the SDWire can still be
-// constructed and its identifying getters used.
+// and surfaced from whatever needs the port instead.
 func newSDWire3Controller(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo, o *options) *sdwire3Controller {
 	c := &sdwire3Controller{
 		ctx:             ctx,
@@ -76,7 +95,7 @@ func newSDWire3Controller(ctx *gousb.Context, dev *gousb.Device, info DeviceInfo
 	}
 	c.port = port
 
-	if !port.PerPortPower() {
+	if !port.PerPortPower() && !usbsuspend.Supported {
 		c.warn(fmt.Sprintf("hub for %s does not switch port power independently; switching this SDWire3 will also affect sibling devices on the same hub", info.Identity()))
 	}
 
@@ -96,10 +115,13 @@ func cachePortRef(o *options, key string, ref *hubpower.PortRef) error {
 	return cache.Save(cachePath)
 }
 
-// SetMode switches the SD card by cutting or restoring VBUS on the
-// SDWire3's upstream hub port. See sdwire3Controller's doc comment for the
-// underlying mechanism and its timing.
+// SetMode switches the SD card by suspending or resuming the reader, or
+// where that is unsupported by cutting or restoring VBUS on its upstream
+// hub port. See sdwire3Controller's doc comment.
 func (c *sdwire3Controller) SetMode(mode SwitchMode) error {
+	if usbsuspend.Supported {
+		return c.setModeBySuspend(mode)
+	}
 	if c.resolveErr != nil {
 		return fmt.Errorf("cannot switch mode: %w", c.resolveErr)
 	}
@@ -146,15 +168,92 @@ func (c *sdwire3Controller) SetMode(mode SwitchMode) error {
 	}
 }
 
+// setModeBySuspend skips a reader already in the requested state: on Linux
+// opening a suspended reader wakes it, and re-enumerating a configured one
+// drops its mounted volumes.
+func (c *sdwire3Controller) setModeBySuspend(mode SwitchMode) error {
+	if mode != ModeTarget && mode != ModeHost {
+		return fmt.Errorf("invalid switch mode: %v", mode)
+	}
+
+	// An open handle keeps the reader awake, and on macOS holds the
+	// exclusive access suspending and re-enumerating it need.
+	if c.device != nil {
+		c.device.Close()
+		c.device = nil
+	}
+
+	st, err := usbStateOf(c.info.Bus, c.info.PortPath)
+	if err != nil {
+		return err
+	}
+	if mode == ModeTarget {
+		if st == usbsuspend.Suspended {
+			return nil
+		}
+		if err := usbSuspend(c.info.Bus, c.info.PortPath); err != nil {
+			return err
+		}
+		return c.awaitState(usbsuspend.Suspended, suspendTimeout)
+	}
+
+	if st == usbsuspend.Configured {
+		return nil
+	}
+	if err := usbResume(c.info.Bus, c.info.PortPath); err != nil {
+		return err
+	}
+	return c.awaitState(usbsuspend.Configured, c.hostWaitTimeout)
+}
+
+// awaitState polls the reader until it reports want: neither a suspend nor
+// a re-enumeration has settled when the call that started it returns.
+func (c *sdwire3Controller) awaitState(want usbsuspend.State, timeout time.Duration) error {
+	deadline := now().Add(timeout)
+	for {
+		st, err := usbStateOf(c.info.Bus, c.info.PortPath)
+		if err == nil && st == want {
+			return nil
+		}
+		if !now().Before(deadline) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("the reader at %s is %s %s after switching, not %s, so the card has not moved%s",
+				c.info.Location(), st, timeout, want, suspendHint(want))
+		}
+		sleep(statePollInterval)
+	}
+}
+
+func suspendHint(want usbsuspend.State) string {
+	if want != usbsuspend.Suspended || runtime.GOOS != "linux" {
+		return ""
+	}
+	return ` (its sysfs power/control must be "auto" and nothing may hold it open; install the udev rule from the README)`
+}
+
+// stateToMode maps the reader's USB state to where its card is. An awake
+// reader with no mass-storage driver (something woke it without
+// reconfiguring it) is on neither side usefully, so it is ModeUnknown, as
+// is one that isn't enumerated at all.
+func stateToMode(st usbsuspend.State) SwitchMode {
+	switch st {
+	case usbsuspend.Suspended:
+		return ModeTarget
+	case usbsuspend.Configured:
+		return ModeHost
+	default:
+		return ModeUnknown
+	}
+}
+
 // Revive power-cycles the SDWire3's hub port and waits for the reader to
-// re-enumerate, without changing which side the card is switched to: this
-// is host mode either way, since a powered SDWire3 is on the host.
+// re-enumerate, which leaves it awake and so in host mode.
 //
 // It exists for a reader that has stopped answering mid-transfer and been
-// torn off the bus by the OS. SetMode(ModeHost) would eventually recover
-// such a device too, but only after waiting out hostWaitTimeout on an
-// already-powered port first; this goes straight to the power cycle, which
-// is the only thing that clears a latched-up reader.
+// torn off the bus by the OS: a power cycle is the only thing that clears
+// a latched-up reader, so it needs a hub with port power switching.
 func (c *sdwire3Controller) Revive() error {
 	if c.resolveErr != nil {
 		return fmt.Errorf("cannot revive: %w", c.resolveErr)
@@ -182,11 +281,16 @@ func (c *sdwire3Controller) Revive() error {
 	return nil
 }
 
-// Mode reads the SDWire3's live state from its hub port: unpowered means
-// ModeTarget; powered and enumerated means ModeHost; powered but not yet
-// enumerated (e.g. mid re-enumeration) is reported as ModeUnknown with a
-// nil error.
+// Mode reads the reader's live state without waking it: suspended is
+// ModeTarget, configured is ModeHost (see stateToMode). Where USB suspend
+// is unsupported it reads the hub port instead: unpowered means ModeTarget;
+// powered and enumerated means ModeHost; powered but not yet enumerated
+// (e.g. mid re-enumeration) is ModeUnknown with a nil error.
 func (c *sdwire3Controller) Mode() (SwitchMode, error) {
+	if usbsuspend.Supported {
+		st, err := usbStateOf(c.info.Bus, c.info.PortPath)
+		return stateToMode(st), err
+	}
 	if c.resolveErr != nil {
 		return ModeUnknown, fmt.Errorf("cannot read mode: %w", c.resolveErr)
 	}

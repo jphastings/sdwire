@@ -1,8 +1,8 @@
 // Package hubpower controls USB hub downstream port power (VBUS) over
-// gousb. It exists because the SDWire3 SD card multiplexer only hands the
-// SD card to its target while its own upstream USB link is down: cutting
-// power to the SDWire3's hub port drops it off the bus and releases the
-// card to the target, and restoring power brings it back to the host.
+// gousb. The sdwire SDK uses it to power-cycle an SDWire3 reader that has
+// latched up and dropped off the bus, and, where USB suspend control is
+// unavailable (Windows), to switch one: an unpowered reader hands its SD
+// card to the target just as a suspended one does.
 package hubpower
 
 import (
