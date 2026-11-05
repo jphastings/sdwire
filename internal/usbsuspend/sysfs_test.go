@@ -1,3 +1,6 @@
+//go:build !windows
+
+// The fake sysfs tree uses Linux interface names like "1-1.2:1.0", which Windows can't create.
 package usbsuspend
 
 import (
